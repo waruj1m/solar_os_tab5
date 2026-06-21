@@ -1,0 +1,1392 @@
+#include "solar_os_wifi.h"
+
+#include <inttypes.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "esp_event.h"
+#include "solar_os_log.h"
+#include "esp_netif.h"
+#include "esp_netif_ip_addr.h"
+#include "esp_wifi.h"
+#include "esp_wifi_default.h"
+#include "nvs.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
+
+static const char *TAG = "solar_os_wifi";
+
+#define SOLAR_OS_WIFI_DEFAULT_AP_SSID "SolarOS-sol"
+#define SOLAR_OS_WIFI_DEFAULT_AP_CHANNEL 6
+#define SOLAR_OS_WIFI_DEFAULT_AP_MAX_CONNECTIONS 4
+#define WIFI_AP_NVS_NAMESPACE "wifi_ap"
+#define WIFI_AP_NVS_SSID_KEY "ssid"
+#define WIFI_AP_NVS_PASSWORD_KEY "password"
+#define WIFI_AP_NVS_AUTH_KEY "auth"
+#define WIFI_NAT_NVS_NAMESPACE "wifi_nat"
+#define WIFI_NAT_NVS_ENABLED_KEY "enabled"
+
+static SemaphoreHandle_t wifi_mutex;
+static esp_netif_t *wifi_sta_netif;
+static esp_netif_t *wifi_ap_netif;
+static bool wifi_initialized;
+static bool wifi_started;
+static bool wifi_sta_enabled;
+static bool wifi_connected;
+static bool wifi_has_ip;
+static bool wifi_has_saved_config;
+static bool wifi_has_saved_ap_config;
+static bool wifi_nat_enabled;
+static bool wifi_nat_active;
+static bool wifi_ap_enabled;
+static bool wifi_ap_running;
+static solar_os_wifi_state_t wifi_state = SOLAR_OS_WIFI_STATE_OFF;
+static char wifi_ssid[SOLAR_OS_WIFI_SSID_MAX + 1];
+static char wifi_saved_ssid[SOLAR_OS_WIFI_SSID_MAX + 1];
+static char wifi_saved_ap_ssid[SOLAR_OS_WIFI_SSID_MAX + 1];
+static char wifi_saved_ap_password[SOLAR_OS_WIFI_PASSWORD_MAX];
+static char wifi_saved_ap_auth[SOLAR_OS_WIFI_AUTH_MAX];
+static char wifi_ip[16];
+static char wifi_gateway[16];
+static char wifi_netmask[16];
+static char wifi_ap_ssid[SOLAR_OS_WIFI_SSID_MAX + 1];
+static char wifi_ap_auth[SOLAR_OS_WIFI_AUTH_MAX];
+static char wifi_ap_ip[16];
+static int8_t wifi_rssi;
+static uint8_t wifi_channel;
+static uint8_t wifi_disconnect_reason;
+static uint8_t wifi_ap_channel;
+static uint8_t wifi_ap_station_count;
+static uint8_t wifi_ap_max_connections;
+static esp_err_t wifi_nat_last_error;
+
+static void wifi_set_started_state(bool started);
+static esp_err_t wifi_update_ap_dns_from_sta(void);
+
+static void wifi_lock(void)
+{
+    if (wifi_mutex != NULL) {
+        xSemaphoreTake(wifi_mutex, portMAX_DELAY);
+    }
+}
+
+static void wifi_unlock(void)
+{
+    if (wifi_mutex != NULL) {
+        xSemaphoreGive(wifi_mutex);
+    }
+}
+
+static void wifi_copy_ssid(char *dest, size_t dest_len, const uint8_t *ssid, size_t ssid_len)
+{
+    if (dest == NULL || dest_len == 0) {
+        return;
+    }
+
+    size_t copy_len = 0;
+    while (copy_len < ssid_len && ssid[copy_len] != '\0') {
+        copy_len++;
+    }
+    if (copy_len >= dest_len) {
+        copy_len = dest_len - 1;
+    }
+
+    memcpy(dest, ssid, copy_len);
+    dest[copy_len] = '\0';
+}
+
+static void wifi_format_ip(const esp_ip4_addr_t *ip, char *dest, size_t dest_len)
+{
+    if (dest == NULL || dest_len == 0) {
+        return;
+    }
+
+    if (ip == NULL || ip->addr == 0) {
+        strlcpy(dest, "0.0.0.0", dest_len);
+        return;
+    }
+
+    snprintf(dest, dest_len, IPSTR, IP2STR(ip));
+}
+
+static const char *wifi_auth_name(wifi_auth_mode_t authmode)
+{
+    switch (authmode) {
+    case WIFI_AUTH_OPEN:
+        return "open";
+    case WIFI_AUTH_WEP:
+        return "wep";
+    case WIFI_AUTH_WPA_PSK:
+        return "wpa";
+    case WIFI_AUTH_WPA2_PSK:
+        return "wpa2";
+    case WIFI_AUTH_WPA_WPA2_PSK:
+        return "wpa/wpa2";
+    case WIFI_AUTH_ENTERPRISE:
+        return "wpa2-eap";
+    case WIFI_AUTH_WPA3_PSK:
+        return "wpa3";
+    case WIFI_AUTH_WPA2_WPA3_PSK:
+        return "wpa2/wpa3";
+    case WIFI_AUTH_WAPI_PSK:
+        return "wapi";
+    case WIFI_AUTH_OWE:
+        return "owe";
+    case WIFI_AUTH_WPA3_ENT_192:
+        return "wpa3-ent";
+    case WIFI_AUTH_DPP:
+        return "dpp";
+    case WIFI_AUTH_WPA3_ENTERPRISE:
+        return "wpa3-eap";
+    case WIFI_AUTH_WPA2_WPA3_ENTERPRISE:
+        return "wpa2/3-eap";
+    case WIFI_AUTH_WPA_ENTERPRISE:
+        return "wpa-eap";
+    default:
+        return "unknown";
+    }
+}
+
+static bool wifi_auth_from_name(const char *name, wifi_auth_mode_t *authmode)
+{
+    if (name == NULL || name[0] == '\0' || strcmp(name, "wpa2") == 0) {
+        *authmode = WIFI_AUTH_WPA2_PSK;
+        return true;
+    }
+    if (strcmp(name, "open") == 0) {
+        *authmode = WIFI_AUTH_OPEN;
+        return true;
+    }
+    if (strcmp(name, "wpa") == 0) {
+        *authmode = WIFI_AUTH_WPA_PSK;
+        return true;
+    }
+    if (strcmp(name, "wpa/wpa2") == 0 || strcmp(name, "wpa2/wpa") == 0) {
+        *authmode = WIFI_AUTH_WPA_WPA2_PSK;
+        return true;
+    }
+    if (strcmp(name, "wep") == 0) {
+        *authmode = WIFI_AUTH_WEP;
+        return true;
+    }
+
+    return false;
+}
+
+static esp_err_t wifi_validate_ap_settings(const char *ssid,
+                                           const char *password,
+                                           const char *auth,
+                                           wifi_auth_mode_t *authmode)
+{
+    if (ssid == NULL || ssid[0] == '\0' || strlen(ssid) > SOLAR_OS_WIFI_SSID_MAX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (password == NULL) {
+        password = "";
+    }
+
+    const size_t password_len = strlen(password);
+    if (password_len >= SOLAR_OS_WIFI_PASSWORD_MAX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    wifi_auth_mode_t selected_auth = password_len == 0 ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA2_PSK;
+    if (auth != NULL && auth[0] != '\0') {
+        if (!wifi_auth_from_name(auth, &selected_auth)) {
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+    if (selected_auth == WIFI_AUTH_WEP) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    if (selected_auth == WIFI_AUTH_OPEN && password_len != 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (selected_auth != WIFI_AUTH_OPEN && password_len < 8) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (authmode != NULL) {
+        *authmode = selected_auth;
+    }
+    return ESP_OK;
+}
+
+static void wifi_clear_saved_ap_config_locked(void)
+{
+    wifi_has_saved_ap_config = false;
+    wifi_saved_ap_ssid[0] = '\0';
+    wifi_saved_ap_password[0] = '\0';
+    wifi_saved_ap_auth[0] = '\0';
+}
+
+static esp_err_t wifi_load_saved_ap_config(void)
+{
+    nvs_handle_t nvs;
+    esp_err_t ret = nvs_open(WIFI_AP_NVS_NAMESPACE, NVS_READONLY, &nvs);
+    if (ret == ESP_ERR_NVS_NOT_FOUND) {
+        wifi_lock();
+        wifi_clear_saved_ap_config_locked();
+        wifi_unlock();
+        return ESP_OK;
+    }
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    char ssid[SOLAR_OS_WIFI_SSID_MAX + 1] = {0};
+    char password[SOLAR_OS_WIFI_PASSWORD_MAX] = {0};
+    char auth[SOLAR_OS_WIFI_AUTH_MAX] = {0};
+    size_t len = sizeof(ssid);
+    ret = nvs_get_str(nvs, WIFI_AP_NVS_SSID_KEY, ssid, &len);
+    if (ret == ESP_OK) {
+        len = sizeof(password);
+        esp_err_t password_ret = nvs_get_str(nvs, WIFI_AP_NVS_PASSWORD_KEY, password, &len);
+        if (password_ret == ESP_ERR_NVS_NOT_FOUND) {
+            password[0] = '\0';
+        } else if (password_ret != ESP_OK) {
+            ret = password_ret;
+        }
+    }
+    if (ret == ESP_OK) {
+        len = sizeof(auth);
+        esp_err_t auth_ret = nvs_get_str(nvs, WIFI_AP_NVS_AUTH_KEY, auth, &len);
+        if (auth_ret == ESP_ERR_NVS_NOT_FOUND) {
+            strlcpy(auth, password[0] == '\0' ? "open" : "wpa2", sizeof(auth));
+        } else if (auth_ret != ESP_OK) {
+            ret = auth_ret;
+        }
+    }
+    nvs_close(nvs);
+
+    wifi_auth_mode_t authmode = WIFI_AUTH_OPEN;
+    if (ret == ESP_OK) {
+        ret = wifi_validate_ap_settings(ssid, password, auth, &authmode);
+    }
+
+    wifi_lock();
+    if (ret == ESP_OK) {
+        wifi_has_saved_ap_config = true;
+        strlcpy(wifi_saved_ap_ssid, ssid, sizeof(wifi_saved_ap_ssid));
+        strlcpy(wifi_saved_ap_password, password, sizeof(wifi_saved_ap_password));
+        strlcpy(wifi_saved_ap_auth, wifi_auth_name(authmode), sizeof(wifi_saved_ap_auth));
+    } else {
+        wifi_clear_saved_ap_config_locked();
+    }
+    wifi_unlock();
+
+    return ret == ESP_ERR_NVS_NOT_FOUND ? ESP_OK : ret;
+}
+
+static esp_err_t wifi_save_ap_config(const char *ssid,
+                                     const char *password,
+                                     wifi_auth_mode_t authmode)
+{
+    if (password == NULL) {
+        password = "";
+    }
+
+    nvs_handle_t nvs;
+    esp_err_t ret = nvs_open(WIFI_AP_NVS_NAMESPACE, NVS_READWRITE, &nvs);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ret = nvs_set_str(nvs, WIFI_AP_NVS_SSID_KEY, ssid);
+    if (ret == ESP_OK) {
+        ret = nvs_set_str(nvs, WIFI_AP_NVS_PASSWORD_KEY, password);
+    }
+    if (ret == ESP_OK) {
+        ret = nvs_set_str(nvs, WIFI_AP_NVS_AUTH_KEY, wifi_auth_name(authmode));
+    }
+    if (ret == ESP_OK) {
+        ret = nvs_commit(nvs);
+    }
+    nvs_close(nvs);
+
+    if (ret == ESP_OK) {
+        wifi_lock();
+        wifi_has_saved_ap_config = true;
+        strlcpy(wifi_saved_ap_ssid, ssid, sizeof(wifi_saved_ap_ssid));
+        strlcpy(wifi_saved_ap_password, password, sizeof(wifi_saved_ap_password));
+        strlcpy(wifi_saved_ap_auth, wifi_auth_name(authmode), sizeof(wifi_saved_ap_auth));
+        wifi_unlock();
+    }
+    return ret;
+}
+
+static esp_err_t wifi_load_nat_config(void)
+{
+    nvs_handle_t nvs;
+    esp_err_t ret = nvs_open(WIFI_NAT_NVS_NAMESPACE, NVS_READONLY, &nvs);
+    if (ret == ESP_ERR_NVS_NOT_FOUND) {
+        wifi_lock();
+        wifi_nat_enabled = false;
+        wifi_nat_last_error = ESP_OK;
+        wifi_unlock();
+        return ESP_OK;
+    }
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    uint8_t enabled = 0;
+    ret = nvs_get_u8(nvs, WIFI_NAT_NVS_ENABLED_KEY, &enabled);
+    nvs_close(nvs);
+    if (ret == ESP_ERR_NVS_NOT_FOUND) {
+        enabled = 0;
+        ret = ESP_OK;
+    }
+    if (ret == ESP_OK) {
+        wifi_lock();
+        wifi_nat_enabled = enabled != 0;
+        wifi_nat_last_error = ESP_OK;
+        wifi_unlock();
+    }
+    return ret;
+}
+
+static esp_err_t wifi_save_nat_config(bool enabled)
+{
+    nvs_handle_t nvs;
+    esp_err_t ret = nvs_open(WIFI_NAT_NVS_NAMESPACE, NVS_READWRITE, &nvs);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ret = nvs_set_u8(nvs, WIFI_NAT_NVS_ENABLED_KEY, enabled ? 1 : 0);
+    if (ret == ESP_OK) {
+        ret = nvs_commit(nvs);
+    }
+    nvs_close(nvs);
+    return ret;
+}
+
+static esp_err_t wifi_apply_nat(void)
+{
+    bool nat_active = false;
+    bool should_enable = false;
+
+    wifi_lock();
+    nat_active = wifi_nat_active;
+    should_enable = wifi_nat_enabled &&
+        wifi_sta_enabled &&
+        wifi_connected &&
+        wifi_has_ip &&
+        wifi_ap_enabled &&
+        wifi_ap_running;
+    wifi_unlock();
+
+    if (!should_enable && !nat_active) {
+        wifi_lock();
+        wifi_nat_active = false;
+        wifi_nat_last_error = ESP_OK;
+        wifi_unlock();
+        return ESP_OK;
+    }
+
+    if (wifi_ap_netif == NULL) {
+        wifi_lock();
+        wifi_nat_active = false;
+        wifi_nat_last_error = should_enable ? ESP_ERR_INVALID_STATE : ESP_OK;
+        wifi_unlock();
+        return should_enable ? ESP_ERR_INVALID_STATE : ESP_OK;
+    }
+
+    if (should_enable && !nat_active) {
+        esp_err_t dns_ret = wifi_update_ap_dns_from_sta();
+        if (dns_ret != ESP_OK) {
+            SOLAR_OS_LOGW(TAG, "AP DHCP DNS preparation failed before NAT: %s", esp_err_to_name(dns_ret));
+        }
+        const esp_err_t ret = esp_netif_napt_enable(wifi_ap_netif);
+        wifi_lock();
+        wifi_nat_active = ret == ESP_OK;
+        wifi_nat_last_error = ret;
+        wifi_unlock();
+        if (ret == ESP_OK) {
+            SOLAR_OS_LOGI(TAG, "NAT enabled on AP interface");
+        } else if (ret != ESP_FAIL) {
+            SOLAR_OS_LOGW(TAG, "NAT enable failed: %s", esp_err_to_name(ret));
+        }
+        return ret;
+    }
+
+    if (!should_enable && nat_active) {
+        const esp_err_t ret = esp_netif_napt_disable(wifi_ap_netif);
+        wifi_lock();
+        wifi_nat_active = false;
+        wifi_nat_last_error = ESP_OK;
+        wifi_unlock();
+        if (ret == ESP_OK) {
+            SOLAR_OS_LOGI(TAG, "NAT disabled on AP interface");
+        }
+        return ret == ESP_FAIL ? ESP_OK : ret;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t wifi_update_ap_dns_from_sta(void)
+{
+    if (wifi_sta_netif == NULL || wifi_ap_netif == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_netif_dns_info_t dns = {0};
+    esp_err_t ret = esp_netif_get_dns_info(wifi_sta_netif, ESP_NETIF_DNS_MAIN, &dns);
+    if (ret != ESP_OK || dns.ip.type != ESP_IPADDR_TYPE_V4 || dns.ip.u_addr.ip4.addr == 0) {
+        return ret == ESP_OK ? ESP_ERR_NOT_FOUND : ret;
+    }
+
+    bool dns_matches = false;
+    bool offer_dns = false;
+    esp_netif_dns_info_t ap_dns = {0};
+    ret = esp_netif_get_dns_info(wifi_ap_netif, ESP_NETIF_DNS_MAIN, &ap_dns);
+    if (ret == ESP_OK &&
+        ap_dns.ip.type == ESP_IPADDR_TYPE_V4 &&
+        ap_dns.ip.u_addr.ip4.addr == dns.ip.u_addr.ip4.addr) {
+        dns_matches = true;
+    }
+
+    uint8_t dhcp_offer_dns = 0;
+    ret = esp_netif_dhcps_option(wifi_ap_netif,
+                                 ESP_NETIF_OP_GET,
+                                 ESP_NETIF_DOMAIN_NAME_SERVER,
+                                 &dhcp_offer_dns,
+                                 sizeof(dhcp_offer_dns));
+    if (ret == ESP_OK) {
+        offer_dns = dhcp_offer_dns != 0;
+    }
+
+    if (dns_matches && offer_dns) {
+        return ESP_OK;
+    }
+
+    esp_netif_dhcp_status_t dhcps_status = ESP_NETIF_DHCP_STOPPED;
+    ret = esp_netif_dhcps_get_status(wifi_ap_netif, &dhcps_status);
+    if (ret != ESP_OK) {
+        SOLAR_OS_LOGW(TAG, "AP DHCP status failed before DNS update: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    const bool restart_dhcps = dhcps_status == ESP_NETIF_DHCP_STARTED;
+    if (restart_dhcps) {
+        ret = esp_netif_dhcps_stop(wifi_ap_netif);
+        if (ret != ESP_OK && ret != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
+            SOLAR_OS_LOGW(TAG, "AP DHCP stop failed before DNS update: %s", esp_err_to_name(ret));
+            return ret;
+        }
+    }
+
+    ret = esp_netif_set_dns_info(wifi_ap_netif, ESP_NETIF_DNS_MAIN, &dns);
+    if (ret != ESP_OK) {
+        SOLAR_OS_LOGW(TAG, "AP DNS update failed: %s", esp_err_to_name(ret));
+        goto restart;
+    }
+
+    dhcp_offer_dns = 1;
+    ret = esp_netif_dhcps_option(wifi_ap_netif,
+                                 ESP_NETIF_OP_SET,
+                                 ESP_NETIF_DOMAIN_NAME_SERVER,
+                                 &dhcp_offer_dns,
+                                 sizeof(dhcp_offer_dns));
+    if (ret != ESP_OK) {
+        SOLAR_OS_LOGW(TAG, "AP DHCP DNS offer update failed: %s", esp_err_to_name(ret));
+        goto restart;
+    }
+
+    SOLAR_OS_LOGI(TAG, "AP DHCP DNS set to " IPSTR, IP2STR(&dns.ip.u_addr.ip4));
+
+restart:
+    if (restart_dhcps) {
+        esp_err_t start_ret = esp_netif_dhcps_start(wifi_ap_netif);
+        if (start_ret != ESP_OK && start_ret != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED) {
+            SOLAR_OS_LOGW(TAG, "AP DHCP restart failed after DNS update: %s", esp_err_to_name(start_ret));
+            return ret == ESP_OK ? start_ret : ret;
+        }
+    }
+    return ret;
+}
+
+static wifi_mode_t wifi_desired_mode(void)
+{
+    if (wifi_sta_enabled && wifi_ap_enabled) {
+        return WIFI_MODE_APSTA;
+    }
+    if (wifi_ap_enabled) {
+        return WIFI_MODE_AP;
+    }
+    if (wifi_sta_enabled) {
+        return WIFI_MODE_STA;
+    }
+    return WIFI_MODE_NULL;
+}
+
+static esp_err_t wifi_apply_mode(void)
+{
+    const wifi_mode_t mode = wifi_desired_mode();
+
+    if (mode == WIFI_MODE_NULL) {
+        (void)wifi_apply_nat();
+
+        if (!wifi_started) {
+            return ESP_OK;
+        }
+
+        const esp_err_t stop_err = esp_wifi_stop();
+        if (stop_err != ESP_OK && stop_err != ESP_ERR_WIFI_NOT_STARTED) {
+            return stop_err;
+        }
+
+        wifi_lock();
+        wifi_started = false;
+        wifi_ap_running = false;
+        wifi_ap_station_count = 0;
+        wifi_nat_active = false;
+        wifi_set_started_state(false);
+        wifi_unlock();
+        return ESP_OK;
+    }
+
+    esp_err_t ret = esp_wifi_set_mode(mode);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    if (!wifi_started) {
+        ret = esp_wifi_start();
+        if (ret != ESP_OK) {
+            return ret;
+        }
+
+        ret = esp_wifi_set_ps(WIFI_PS_MAX_MODEM);
+        if (ret != ESP_OK) {
+            SOLAR_OS_LOGW(TAG, "Wi-Fi power save setup failed: %s", esp_err_to_name(ret));
+        }
+    }
+
+    wifi_lock();
+    wifi_started = true;
+    if (wifi_sta_enabled && !wifi_connected) {
+        wifi_state = SOLAR_OS_WIFI_STATE_IDLE;
+    } else if (!wifi_sta_enabled) {
+        wifi_state = SOLAR_OS_WIFI_STATE_OFF;
+    }
+    wifi_unlock();
+    (void)wifi_apply_nat();
+    return ESP_OK;
+}
+
+static void wifi_update_saved_config(void)
+{
+    if (!wifi_initialized) {
+        return;
+    }
+
+    wifi_config_t config = {0};
+    const esp_err_t err = esp_wifi_get_config(WIFI_IF_STA, &config);
+
+    wifi_lock();
+    if (err == ESP_OK && config.sta.ssid[0] != '\0') {
+        wifi_copy_ssid(wifi_saved_ssid, sizeof(wifi_saved_ssid), config.sta.ssid, sizeof(config.sta.ssid));
+        wifi_has_saved_config = wifi_saved_ssid[0] != '\0';
+    } else {
+        wifi_saved_ssid[0] = '\0';
+        wifi_has_saved_config = false;
+    }
+    wifi_unlock();
+}
+
+static void wifi_clear_link_state(void)
+{
+    wifi_connected = false;
+    wifi_has_ip = false;
+    wifi_rssi = 0;
+    wifi_channel = 0;
+    wifi_ip[0] = '\0';
+    wifi_gateway[0] = '\0';
+    wifi_netmask[0] = '\0';
+}
+
+static void wifi_refresh_link_info(void)
+{
+    bool should_refresh = false;
+
+    wifi_lock();
+    should_refresh = wifi_initialized && wifi_connected;
+    wifi_unlock();
+
+    if (!should_refresh) {
+        return;
+    }
+
+    wifi_ap_record_t ap_info = {0};
+    const esp_err_t err = esp_wifi_sta_get_ap_info(&ap_info);
+
+    wifi_lock();
+    if (!wifi_connected) {
+        wifi_unlock();
+        return;
+    }
+    if (err == ESP_OK) {
+        wifi_rssi = ap_info.rssi;
+        wifi_channel = ap_info.primary;
+        wifi_copy_ssid(wifi_ssid, sizeof(wifi_ssid), ap_info.ssid, sizeof(ap_info.ssid));
+    } else {
+        wifi_rssi = 0;
+        wifi_channel = 0;
+    }
+    wifi_unlock();
+}
+
+static void wifi_set_started_state(bool started)
+{
+    wifi_started = started;
+    if (!started) {
+        wifi_clear_link_state();
+        wifi_state = SOLAR_OS_WIFI_STATE_OFF;
+    } else if (wifi_sta_enabled && !wifi_connected) {
+        wifi_state = SOLAR_OS_WIFI_STATE_IDLE;
+    } else if (!wifi_sta_enabled) {
+        wifi_state = SOLAR_OS_WIFI_STATE_OFF;
+    }
+}
+
+static void wifi_disconnect_for_reconfig(void)
+{
+    const esp_err_t err = esp_wifi_disconnect();
+    if (err == ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
+static void wifi_event_handler(void *arg,
+                               esp_event_base_t event_base,
+                               int32_t event_id,
+                               void *event_data)
+{
+    (void)arg;
+
+    if (event_base == WIFI_EVENT) {
+        switch (event_id) {
+        case WIFI_EVENT_STA_START:
+            wifi_lock();
+            wifi_sta_enabled = true;
+            wifi_set_started_state(true);
+            wifi_unlock();
+            break;
+        case WIFI_EVENT_STA_STOP:
+            wifi_lock();
+            wifi_clear_link_state();
+            wifi_sta_enabled = false;
+            if (!wifi_ap_enabled) {
+                wifi_set_started_state(false);
+            } else {
+                wifi_state = SOLAR_OS_WIFI_STATE_OFF;
+            }
+            wifi_unlock();
+            break;
+        case WIFI_EVENT_AP_START:
+            wifi_lock();
+            wifi_started = true;
+            wifi_ap_running = true;
+            wifi_unlock();
+            break;
+        case WIFI_EVENT_AP_STOP:
+            wifi_lock();
+            wifi_ap_running = false;
+            wifi_ap_station_count = 0;
+            if (!wifi_sta_enabled) {
+                wifi_started = false;
+            }
+            wifi_unlock();
+            break;
+        case WIFI_EVENT_AP_STACONNECTED:
+            wifi_lock();
+            if (wifi_ap_station_count < UINT8_MAX) {
+                wifi_ap_station_count++;
+            }
+            wifi_unlock();
+            break;
+        case WIFI_EVENT_AP_STADISCONNECTED:
+            wifi_lock();
+            if (wifi_ap_station_count > 0) {
+                wifi_ap_station_count--;
+            }
+            wifi_unlock();
+            break;
+        case WIFI_EVENT_STA_CONNECTED: {
+            const wifi_event_sta_connected_t *event = (const wifi_event_sta_connected_t *)event_data;
+            wifi_lock();
+            wifi_connected = true;
+            wifi_has_ip = false;
+            wifi_disconnect_reason = 0;
+            wifi_state = SOLAR_OS_WIFI_STATE_CONNECTING;
+            wifi_channel = event != NULL ? event->channel : 0;
+            if (event != NULL) {
+                wifi_copy_ssid(wifi_ssid, sizeof(wifi_ssid), event->ssid, event->ssid_len);
+            }
+            wifi_unlock();
+            break;
+        }
+        case WIFI_EVENT_STA_DISCONNECTED: {
+            const wifi_event_sta_disconnected_t *event = (const wifi_event_sta_disconnected_t *)event_data;
+            wifi_lock();
+            wifi_clear_link_state();
+            wifi_disconnect_reason = event != NULL ? event->reason : 0;
+            if (event != NULL && event->ssid_len > 0) {
+                wifi_copy_ssid(wifi_ssid, sizeof(wifi_ssid), event->ssid, event->ssid_len);
+            }
+            wifi_state = wifi_started ? SOLAR_OS_WIFI_STATE_DISCONNECTED : SOLAR_OS_WIFI_STATE_OFF;
+            wifi_unlock();
+            break;
+        }
+        default:
+            break;
+        }
+        (void)wifi_apply_nat();
+        return;
+    }
+
+    if (event_base == IP_EVENT) {
+        switch (event_id) {
+        case IP_EVENT_STA_GOT_IP: {
+            const ip_event_got_ip_t *event = (const ip_event_got_ip_t *)event_data;
+            wifi_ap_record_t ap_info = {0};
+            const esp_err_t ap_err = esp_wifi_sta_get_ap_info(&ap_info);
+
+            wifi_lock();
+            wifi_has_ip = true;
+            wifi_connected = true;
+            wifi_state = SOLAR_OS_WIFI_STATE_CONNECTED;
+            if (event != NULL) {
+                wifi_format_ip(&event->ip_info.ip, wifi_ip, sizeof(wifi_ip));
+                wifi_format_ip(&event->ip_info.gw, wifi_gateway, sizeof(wifi_gateway));
+                wifi_format_ip(&event->ip_info.netmask, wifi_netmask, sizeof(wifi_netmask));
+            }
+            if (ap_err == ESP_OK) {
+                wifi_rssi = ap_info.rssi;
+                wifi_channel = ap_info.primary;
+                wifi_copy_ssid(wifi_ssid, sizeof(wifi_ssid), ap_info.ssid, sizeof(ap_info.ssid));
+            }
+            wifi_unlock();
+            break;
+        }
+        case IP_EVENT_STA_LOST_IP:
+            wifi_lock();
+            wifi_has_ip = false;
+            wifi_ip[0] = '\0';
+            wifi_gateway[0] = '\0';
+            wifi_netmask[0] = '\0';
+            if (wifi_connected) {
+                wifi_state = SOLAR_OS_WIFI_STATE_CONNECTING;
+            }
+            wifi_unlock();
+            break;
+        default:
+            break;
+        }
+        (void)wifi_apply_nat();
+    }
+}
+
+const char *solar_os_wifi_state_name(solar_os_wifi_state_t state)
+{
+    switch (state) {
+    case SOLAR_OS_WIFI_STATE_OFF:
+        return "off";
+    case SOLAR_OS_WIFI_STATE_IDLE:
+        return "idle";
+    case SOLAR_OS_WIFI_STATE_SCANNING:
+        return "scanning";
+    case SOLAR_OS_WIFI_STATE_CONNECTING:
+        return "connecting";
+    case SOLAR_OS_WIFI_STATE_CONNECTED:
+        return "connected";
+    case SOLAR_OS_WIFI_STATE_DISCONNECTED:
+        return "disconnected";
+    case SOLAR_OS_WIFI_STATE_FAILED:
+        return "failed";
+    default:
+        return "unknown";
+    }
+}
+
+esp_err_t solar_os_wifi_init(void)
+{
+    if (wifi_initialized) {
+        return ESP_OK;
+    }
+
+    if (wifi_mutex == NULL) {
+        wifi_mutex = xSemaphoreCreateMutex();
+        if (wifi_mutex == NULL) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    esp_err_t ret = esp_netif_init();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ret = esp_event_loop_create_default();
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        return ret;
+    }
+
+    wifi_sta_netif = esp_netif_create_default_wifi_sta();
+    if (wifi_sta_netif == NULL) {
+        return ESP_FAIL;
+    }
+
+    wifi_ap_netif = esp_netif_create_default_wifi_ap();
+    if (wifi_ap_netif == NULL) {
+        return ESP_FAIL;
+    }
+
+    wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
+    ret = esp_wifi_init(&config);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ret = esp_wifi_set_storage(WIFI_STORAGE_FLASH);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ret = esp_wifi_set_mode(WIFI_MODE_NULL);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ret = esp_event_handler_instance_register(WIFI_EVENT,
+                                              ESP_EVENT_ANY_ID,
+                                              wifi_event_handler,
+                                              NULL,
+                                              NULL);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ret = esp_event_handler_instance_register(IP_EVENT,
+                                              IP_EVENT_STA_GOT_IP,
+                                              wifi_event_handler,
+                                              NULL,
+                                              NULL);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ret = esp_event_handler_instance_register(IP_EVENT,
+                                              IP_EVENT_STA_LOST_IP,
+                                              wifi_event_handler,
+                                              NULL,
+                                              NULL);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    wifi_lock();
+    wifi_initialized = true;
+    wifi_state = SOLAR_OS_WIFI_STATE_OFF;
+    wifi_ap_channel = SOLAR_OS_WIFI_DEFAULT_AP_CHANNEL;
+    wifi_ap_max_connections = SOLAR_OS_WIFI_DEFAULT_AP_MAX_CONNECTIONS;
+    strlcpy(wifi_ap_auth, "open", sizeof(wifi_ap_auth));
+    strlcpy(wifi_saved_ap_auth, "open", sizeof(wifi_saved_ap_auth));
+    wifi_format_ip(&(esp_ip4_addr_t){0}, wifi_ap_ip, sizeof(wifi_ap_ip));
+    wifi_unlock();
+
+    ret = wifi_load_saved_ap_config();
+    if (ret != ESP_OK) {
+        SOLAR_OS_LOGW(TAG, "saved AP config load failed: %s", esp_err_to_name(ret));
+    }
+    ret = wifi_load_nat_config();
+    if (ret != ESP_OK) {
+        SOLAR_OS_LOGW(TAG, "NAT config load failed: %s", esp_err_to_name(ret));
+    }
+    wifi_update_saved_config();
+    SOLAR_OS_LOGI(TAG, "Wi-Fi service ready");
+    return ESP_OK;
+}
+
+esp_err_t solar_os_wifi_start(void)
+{
+    esp_err_t ret = solar_os_wifi_init();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    wifi_lock();
+    wifi_sta_enabled = true;
+    wifi_unlock();
+
+    ret = wifi_apply_mode();
+    if (ret != ESP_OK) {
+        wifi_lock();
+        wifi_state = SOLAR_OS_WIFI_STATE_FAILED;
+        wifi_unlock();
+        return ret;
+    }
+
+    wifi_update_saved_config();
+    return ESP_OK;
+}
+
+esp_err_t solar_os_wifi_stop(void)
+{
+    if (!wifi_initialized || !wifi_started) {
+        wifi_lock();
+        wifi_state = SOLAR_OS_WIFI_STATE_OFF;
+        wifi_unlock();
+        return ESP_OK;
+    }
+
+    (void)esp_wifi_disconnect();
+
+    wifi_lock();
+    wifi_sta_enabled = false;
+    wifi_ap_enabled = false;
+    wifi_ap_running = false;
+    wifi_ap_station_count = 0;
+    wifi_unlock();
+
+    return wifi_apply_mode();
+}
+
+esp_err_t solar_os_wifi_connect(const char *ssid, const char *password)
+{
+    if (ssid == NULL || ssid[0] == '\0' || strlen(ssid) > SOLAR_OS_WIFI_SSID_MAX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (password != NULL && strlen(password) >= SOLAR_OS_WIFI_PASSWORD_MAX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t ret = solar_os_wifi_start();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    wifi_config_t config = {0};
+    memcpy(config.sta.ssid, ssid, strlen(ssid));
+    if (password != NULL) {
+        memcpy(config.sta.password, password, strlen(password));
+    }
+    config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+    config.sta.failure_retry_cnt = 3;
+
+    wifi_lock();
+    wifi_sta_enabled = true;
+    wifi_unlock();
+
+    wifi_disconnect_for_reconfig();
+    ret = esp_wifi_set_config(WIFI_IF_STA, &config);
+    if (ret != ESP_OK) {
+        wifi_lock();
+        wifi_state = SOLAR_OS_WIFI_STATE_FAILED;
+        wifi_unlock();
+        return ret;
+    }
+
+    wifi_lock();
+    wifi_copy_ssid(wifi_ssid, sizeof(wifi_ssid), config.sta.ssid, sizeof(config.sta.ssid));
+    strlcpy(wifi_saved_ssid, wifi_ssid, sizeof(wifi_saved_ssid));
+    wifi_has_saved_config = wifi_saved_ssid[0] != '\0';
+    wifi_has_ip = false;
+    wifi_state = SOLAR_OS_WIFI_STATE_CONNECTING;
+    wifi_unlock();
+
+    ret = esp_wifi_connect();
+    if (ret != ESP_OK) {
+        wifi_lock();
+        wifi_state = SOLAR_OS_WIFI_STATE_FAILED;
+        wifi_unlock();
+        return ret;
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t solar_os_wifi_connect_saved(void)
+{
+    esp_err_t ret = solar_os_wifi_start();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    wifi_config_t config = {0};
+    ret = esp_wifi_get_config(WIFI_IF_STA, &config);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    char ssid[SOLAR_OS_WIFI_SSID_MAX + 1];
+    wifi_copy_ssid(ssid, sizeof(ssid), config.sta.ssid, sizeof(config.sta.ssid));
+    if (ssid[0] == '\0') {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    wifi_lock();
+    strlcpy(wifi_ssid, ssid, sizeof(wifi_ssid));
+    strlcpy(wifi_saved_ssid, ssid, sizeof(wifi_saved_ssid));
+    wifi_has_saved_config = true;
+    wifi_has_ip = false;
+    wifi_state = SOLAR_OS_WIFI_STATE_CONNECTING;
+    wifi_unlock();
+
+    ret = esp_wifi_connect();
+    if (ret != ESP_OK) {
+        wifi_lock();
+        wifi_state = SOLAR_OS_WIFI_STATE_FAILED;
+        wifi_unlock();
+    }
+    return ret;
+}
+
+esp_err_t solar_os_wifi_disconnect(void)
+{
+    if (!wifi_initialized || !wifi_started) {
+        return ESP_OK;
+    }
+
+    const esp_err_t ret = esp_wifi_disconnect();
+    if (ret != ESP_OK &&
+        ret != ESP_ERR_WIFI_NOT_STARTED &&
+        ret != ESP_ERR_WIFI_NOT_CONNECT) {
+        return ret;
+    }
+
+    wifi_lock();
+    wifi_clear_link_state();
+    wifi_disconnect_reason = 0;
+    wifi_state = SOLAR_OS_WIFI_STATE_IDLE;
+    wifi_unlock();
+    return ESP_OK;
+}
+
+esp_err_t solar_os_wifi_forget(void)
+{
+    esp_err_t ret = solar_os_wifi_init();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    (void)esp_wifi_disconnect();
+    wifi_config_t config = {0};
+    ret = esp_wifi_set_config(WIFI_IF_STA, &config);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    wifi_lock();
+    wifi_clear_link_state();
+    wifi_ssid[0] = '\0';
+    wifi_saved_ssid[0] = '\0';
+    wifi_has_saved_config = false;
+    wifi_disconnect_reason = 0;
+    wifi_state = wifi_sta_enabled ? SOLAR_OS_WIFI_STATE_IDLE : SOLAR_OS_WIFI_STATE_OFF;
+    wifi_unlock();
+    return ESP_OK;
+}
+
+esp_err_t solar_os_wifi_ap_start(const char *ssid, const char *password, const char *auth)
+{
+    esp_err_t ret = solar_os_wifi_init();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    char selected_ssid[SOLAR_OS_WIFI_SSID_MAX + 1] = {0};
+    char selected_password[SOLAR_OS_WIFI_PASSWORD_MAX] = {0};
+    char selected_auth[SOLAR_OS_WIFI_AUTH_MAX] = {0};
+    const bool use_saved = ssid == NULL || ssid[0] == '\0';
+
+    if (use_saved) {
+        bool has_saved = false;
+        wifi_lock();
+        has_saved = wifi_has_saved_ap_config;
+        if (has_saved) {
+            strlcpy(selected_ssid, wifi_saved_ap_ssid, sizeof(selected_ssid));
+            strlcpy(selected_password, wifi_saved_ap_password, sizeof(selected_password));
+            strlcpy(selected_auth, wifi_saved_ap_auth, sizeof(selected_auth));
+        }
+        wifi_unlock();
+
+        if (!has_saved) {
+            strlcpy(selected_ssid, SOLAR_OS_WIFI_DEFAULT_AP_SSID, sizeof(selected_ssid));
+            selected_password[0] = '\0';
+            strlcpy(selected_auth, "open", sizeof(selected_auth));
+        }
+    } else {
+        wifi_auth_mode_t unused_authmode = WIFI_AUTH_OPEN;
+        ret = wifi_validate_ap_settings(ssid, password, auth, &unused_authmode);
+        if (ret != ESP_OK) {
+            return ret;
+        }
+
+        strlcpy(selected_ssid, ssid, sizeof(selected_ssid));
+        if (password != NULL) {
+            strlcpy(selected_password, password, sizeof(selected_password));
+        }
+        if (auth != NULL) {
+            strlcpy(selected_auth, auth, sizeof(selected_auth));
+        }
+    }
+
+    wifi_auth_mode_t authmode = WIFI_AUTH_OPEN;
+    ret = wifi_validate_ap_settings(selected_ssid, selected_password, selected_auth, &authmode);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    if (!use_saved) {
+        ret = wifi_save_ap_config(selected_ssid, selected_password, authmode);
+        if (ret != ESP_OK) {
+            return ret;
+        }
+    }
+
+    wifi_config_t config = {0};
+    const size_t ssid_len = strlen(selected_ssid);
+    const size_t password_len = strlen(selected_password);
+    memcpy(config.ap.ssid, selected_ssid, ssid_len);
+    config.ap.ssid_len = (uint8_t)ssid_len;
+    memcpy(config.ap.password, selected_password, password_len);
+    config.ap.channel = wifi_connected && wifi_channel != 0 ?
+        wifi_channel :
+        SOLAR_OS_WIFI_DEFAULT_AP_CHANNEL;
+    config.ap.authmode = authmode;
+    config.ap.max_connection = SOLAR_OS_WIFI_DEFAULT_AP_MAX_CONNECTIONS;
+    config.ap.beacon_interval = 100;
+    config.ap.pmf_cfg.required = false;
+
+    wifi_lock();
+    wifi_ap_enabled = true;
+    wifi_unlock();
+
+    ret = wifi_apply_mode();
+    if (ret != ESP_OK) {
+        wifi_lock();
+        wifi_ap_enabled = false;
+        wifi_ap_running = false;
+        wifi_unlock();
+        return ret;
+    }
+
+    ret = esp_wifi_set_config(WIFI_IF_AP, &config);
+    if (ret != ESP_OK) {
+        wifi_lock();
+        wifi_ap_enabled = false;
+        wifi_ap_running = false;
+        wifi_unlock();
+        (void)wifi_apply_mode();
+        return ret;
+    }
+
+    wifi_lock();
+    wifi_copy_ssid(wifi_ap_ssid, sizeof(wifi_ap_ssid), config.ap.ssid, config.ap.ssid_len);
+    strlcpy(wifi_ap_auth, wifi_auth_name(authmode), sizeof(wifi_ap_auth));
+    wifi_ap_channel = config.ap.channel;
+    wifi_ap_max_connections = config.ap.max_connection;
+    wifi_unlock();
+
+    if (wifi_ap_netif != NULL) {
+        esp_netif_ip_info_t ip_info = {0};
+        if (esp_netif_get_ip_info(wifi_ap_netif, &ip_info) == ESP_OK) {
+            wifi_lock();
+            wifi_format_ip(&ip_info.ip, wifi_ap_ip, sizeof(wifi_ap_ip));
+            wifi_unlock();
+        }
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t solar_os_wifi_ap_stop(void)
+{
+    if (!wifi_initialized) {
+        return ESP_OK;
+    }
+
+    wifi_lock();
+    wifi_ap_enabled = false;
+    wifi_ap_running = false;
+    wifi_ap_station_count = 0;
+    wifi_ap_ssid[0] = '\0';
+    wifi_ap_auth[0] = '\0';
+    wifi_ap_ip[0] = '\0';
+    wifi_unlock();
+
+    return wifi_apply_mode();
+}
+
+esp_err_t solar_os_wifi_nat_set(bool enabled)
+{
+    esp_err_t ret = solar_os_wifi_init();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ret = wifi_save_nat_config(enabled);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    wifi_lock();
+    wifi_nat_enabled = enabled;
+    if (!enabled) {
+        wifi_nat_last_error = ESP_OK;
+    }
+    wifi_unlock();
+
+    return wifi_apply_nat();
+}
+
+esp_err_t solar_os_wifi_scan(solar_os_wifi_ap_t *aps, size_t max_aps, size_t *found)
+{
+    if (found != NULL) {
+        *found = 0;
+    }
+    if (max_aps > 0 && aps == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t ret = solar_os_wifi_start();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    wifi_lock();
+    const solar_os_wifi_state_t previous_state = wifi_state;
+    wifi_state = SOLAR_OS_WIFI_STATE_SCANNING;
+    wifi_unlock();
+
+    ret = esp_wifi_scan_start(NULL, true);
+    if (ret != ESP_OK) {
+        wifi_lock();
+        wifi_state = previous_state;
+        wifi_unlock();
+        return ret;
+    }
+
+    uint16_t record_count = max_aps > SOLAR_OS_WIFI_SCAN_MAX_RESULTS ?
+        SOLAR_OS_WIFI_SCAN_MAX_RESULTS :
+        (uint16_t)max_aps;
+    wifi_ap_record_t records[SOLAR_OS_WIFI_SCAN_MAX_RESULTS] = {0};
+    ret = esp_wifi_scan_get_ap_records(&record_count, records);
+    if (ret != ESP_OK) {
+        wifi_lock();
+        wifi_state = previous_state;
+        wifi_unlock();
+        return ret;
+    }
+
+    for (uint16_t i = 0; i < record_count; i++) {
+        wifi_copy_ssid(aps[i].ssid, sizeof(aps[i].ssid), records[i].ssid, sizeof(records[i].ssid));
+        aps[i].hidden = aps[i].ssid[0] == '\0';
+        if (aps[i].hidden) {
+            strlcpy(aps[i].ssid, "<hidden>", sizeof(aps[i].ssid));
+        }
+        strlcpy(aps[i].auth, wifi_auth_name(records[i].authmode), sizeof(aps[i].auth));
+        aps[i].rssi = records[i].rssi;
+        aps[i].channel = records[i].primary;
+    }
+    if (found != NULL) {
+        *found = record_count;
+    }
+
+    wifi_lock();
+    if (!wifi_started) {
+        wifi_state = SOLAR_OS_WIFI_STATE_OFF;
+    } else if (wifi_connected && wifi_has_ip) {
+        wifi_state = SOLAR_OS_WIFI_STATE_CONNECTED;
+    } else if (wifi_connected) {
+        wifi_state = SOLAR_OS_WIFI_STATE_CONNECTING;
+    } else {
+        wifi_state = SOLAR_OS_WIFI_STATE_IDLE;
+    }
+    wifi_unlock();
+
+    return ESP_OK;
+}
+
+void solar_os_wifi_get_status(solar_os_wifi_status_t *status)
+{
+    if (status == NULL) {
+        return;
+    }
+
+    wifi_refresh_link_info();
+
+    wifi_lock();
+    *status = (solar_os_wifi_status_t){
+        .state = wifi_state,
+        .initialized = wifi_initialized,
+        .started = wifi_started,
+        .connected = wifi_connected,
+        .has_ip = wifi_has_ip,
+        .has_saved_config = wifi_has_saved_config,
+        .has_saved_ap_config = wifi_has_saved_ap_config,
+        .nat_enabled = wifi_nat_enabled,
+        .nat_active = wifi_nat_active,
+        .ap_enabled = wifi_ap_enabled,
+        .ap_running = wifi_ap_running,
+        .rssi = wifi_rssi,
+        .channel = wifi_channel,
+        .disconnect_reason = wifi_disconnect_reason,
+        .ap_channel = wifi_ap_channel,
+        .ap_station_count = wifi_ap_station_count,
+        .ap_max_connections = wifi_ap_max_connections,
+        .nat_last_error = wifi_nat_last_error,
+    };
+    strlcpy(status->ssid, wifi_ssid, sizeof(status->ssid));
+    strlcpy(status->saved_ssid, wifi_saved_ssid, sizeof(status->saved_ssid));
+    strlcpy(status->saved_ap_ssid, wifi_saved_ap_ssid, sizeof(status->saved_ap_ssid));
+    strlcpy(status->saved_ap_auth, wifi_saved_ap_auth, sizeof(status->saved_ap_auth));
+    strlcpy(status->ip, wifi_ip, sizeof(status->ip));
+    strlcpy(status->gateway, wifi_gateway, sizeof(status->gateway));
+    strlcpy(status->netmask, wifi_netmask, sizeof(status->netmask));
+    strlcpy(status->ap_ssid, wifi_ap_ssid, sizeof(status->ap_ssid));
+    strlcpy(status->ap_auth, wifi_ap_auth, sizeof(status->ap_auth));
+    strlcpy(status->ap_ip, wifi_ap_ip, sizeof(status->ap_ip));
+    wifi_unlock();
+}
+
+void solar_os_wifi_get_status_text(char *buffer, size_t len)
+{
+    if (buffer == NULL || len == 0) {
+        return;
+    }
+
+    solar_os_wifi_status_t status;
+    solar_os_wifi_get_status(&status);
+
+    if (!status.initialized ||
+        (status.state == SOLAR_OS_WIFI_STATE_OFF && !status.ap_running)) {
+        strlcpy(buffer, "off", len);
+    } else if (status.state == SOLAR_OS_WIFI_STATE_CONNECTED && status.has_ip) {
+        snprintf(buffer,
+                 len,
+                 "up %s%s%s",
+                 status.ip,
+                 status.ap_running ? " ap" : "",
+                 status.nat_active ? " nat" : "");
+    } else if (status.ap_running) {
+        snprintf(buffer,
+                 len,
+                 "ap %s%s",
+                 status.ap_ip[0] != '\0' ? status.ap_ip : status.ap_ssid,
+                 status.nat_active ? " nat" : "");
+    } else if (status.state == SOLAR_OS_WIFI_STATE_CONNECTING && status.ssid[0] != '\0') {
+        snprintf(buffer, len, "connecting %s", status.ssid);
+    } else if (status.state == SOLAR_OS_WIFI_STATE_DISCONNECTED && status.disconnect_reason != 0) {
+        snprintf(buffer, len, "down r%u", (unsigned)status.disconnect_reason);
+    } else {
+        strlcpy(buffer, solar_os_wifi_state_name(status.state), len);
+    }
+}

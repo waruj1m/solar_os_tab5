@@ -1,0 +1,24 @@
+#pragma once
+
+#include "solar_os.h"
+#include "solar_os_log.h"
+
+const solar_os_app_t *solar_os_shell_app(void);
+
+solar_os_shell_session_t *solar_os_shell_session_create(void);
+void solar_os_shell_session_destroy(solar_os_shell_session_t *session);
+solar_os_shell_io_t *solar_os_shell_session_io(solar_os_shell_session_t *session);
+const solar_os_app_t *solar_os_shell_session_foreground_app(solar_os_shell_session_t *session);
+void solar_os_shell_session_set_foreground_app(solar_os_shell_session_t *session,
+                                               const solar_os_app_t *app);
+esp_err_t solar_os_shell_session_start(solar_os_context_t *ctx,
+                                       solar_os_shell_session_t *session,
+                                       solar_os_shell_io_t *io,
+                                       bool preserve_terminal,
+                                       bool run_startup);
+bool solar_os_shell_session_event(solar_os_context_t *ctx,
+                                  solar_os_shell_session_t *session,
+                                  const solar_os_event_t *event);
+void solar_os_shell_session_prompt(solar_os_context_t *ctx, solar_os_shell_session_t *session);
+esp_err_t solar_os_shell_session_start_log_follow(solar_os_context_t *ctx,
+                                                  solar_os_log_level_t level);

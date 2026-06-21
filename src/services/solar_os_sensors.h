@@ -1,0 +1,11 @@
+#pragma once
+
+#include "esp_err.h"
+
+typedef struct {
+    float temperature_c;
+    float humidity_percent;
+} solar_os_environment_t;
+
+esp_err_t solar_os_sensors_init(void);
+esp_err_t solar_os_sensors_read_environment(solar_os_environment_t *environment);
