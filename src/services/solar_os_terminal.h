@@ -34,6 +34,7 @@ typedef struct {
     bool wifi_has_ip;
     uint8_t wifi_level;
     bool audio_enabled;
+    uint8_t audio_volume;
     bool time_valid;
     uint8_t hour;
     uint8_t minute;

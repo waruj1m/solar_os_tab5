@@ -506,6 +506,7 @@ static void update_status(void)
     solar_os_audio_status_t audio;
     solar_os_audio_get_status(&audio);
     status.audio_enabled = audio.initialized;
+    status.audio_volume = audio.volume;
 
     solar_os_wifi_status_t wifi;
     solar_os_wifi_get_status(&wifi);

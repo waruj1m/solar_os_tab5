@@ -938,6 +938,7 @@ static bool terminal_status_bar_equal(const solar_os_status_bar_t *a,
         a->wifi_has_ip == b->wifi_has_ip &&
         a->wifi_level == b->wifi_level &&
         a->audio_enabled == b->audio_enabled &&
+        a->audio_volume == b->audio_volume &&
         a->time_valid == b->time_valid &&
         a->hour == b->hour &&
         a->minute == b->minute &&
@@ -1805,22 +1806,29 @@ static void terminal_draw_sd_icon(u8g2_t *u8g2, int x, int y, bool mounted)
     }
 }
 
-static void terminal_draw_speaker_icon(u8g2_t *u8g2, int x, int y, bool enabled)
+static void terminal_draw_speaker_icon(u8g2_t *u8g2, int x, int y, bool enabled, uint8_t volume)
 {
+    const bool audible = enabled && volume > 0;
+    const uint8_t bars = audible ? (volume > 80 ? 2 : 1) : 0;
+
     u8g2_DrawBox(u8g2, (u8g2_uint_t)x, (u8g2_uint_t)(y + 5), 3, 4);
     terminal_draw_diag_up(u8g2, x + 3, y + 2, 6, 4);
     terminal_draw_diag_down(u8g2, x + 3, y + 8, 6, 4);
     u8g2_DrawVLine(u8g2, (u8g2_uint_t)(x + 8), (u8g2_uint_t)(y + 2), 10);
 
-    u8g2_DrawPixel(u8g2, (u8g2_uint_t)(x + 11), (u8g2_uint_t)(y + 4));
-    u8g2_DrawVLine(u8g2, (u8g2_uint_t)(x + 12), (u8g2_uint_t)(y + 5), 4);
-    u8g2_DrawPixel(u8g2, (u8g2_uint_t)(x + 11), (u8g2_uint_t)(y + 9));
+    if (bars >= 1) {
+        u8g2_DrawPixel(u8g2, (u8g2_uint_t)(x + 11), (u8g2_uint_t)(y + 4));
+        u8g2_DrawVLine(u8g2, (u8g2_uint_t)(x + 12), (u8g2_uint_t)(y + 5), 4);
+        u8g2_DrawPixel(u8g2, (u8g2_uint_t)(x + 11), (u8g2_uint_t)(y + 9));
+    }
 
-    u8g2_DrawPixel(u8g2, (u8g2_uint_t)(x + 15), (u8g2_uint_t)(y + 2));
-    u8g2_DrawVLine(u8g2, (u8g2_uint_t)(x + 16), (u8g2_uint_t)(y + 3), 8);
-    u8g2_DrawPixel(u8g2, (u8g2_uint_t)(x + 15), (u8g2_uint_t)(y + 11));
+    if (bars >= 2) {
+        u8g2_DrawPixel(u8g2, (u8g2_uint_t)(x + 15), (u8g2_uint_t)(y + 2));
+        u8g2_DrawVLine(u8g2, (u8g2_uint_t)(x + 16), (u8g2_uint_t)(y + 3), 8);
+        u8g2_DrawPixel(u8g2, (u8g2_uint_t)(x + 15), (u8g2_uint_t)(y + 11));
+    }
 
-    if (!enabled) {
+    if (!audible) {
         terminal_draw_status_slash(u8g2, x, y + 2, 17, 9);
     }
 }
@@ -1893,7 +1901,7 @@ static void terminal_draw_status_bar(solar_os_terminal_t *terminal, u8g2_t *u8g2
                             status->wifi_has_ip,
                             status->wifi_level);
     x += 22;
-    terminal_draw_speaker_icon(u8g2, x, icon_y, status->audio_enabled);
+    terminal_draw_speaker_icon(u8g2, x, icon_y, status->audio_enabled, status->audio_volume);
     x += 24;
 
     u8g2_SetFont(u8g2, u8g2_font_6x13_tf);

@@ -4070,7 +4070,8 @@ static void audio_print_usage(solar_os_shell_io_t *term)
     solar_os_shell_io_writeln(term, "usage:");
     solar_os_shell_io_writeln(term, "  audio status");
     solar_os_shell_io_writeln(term, "  audio tone [hz] [ms] [volume]");
-    solar_os_shell_io_writeln(term, "  audio level [ms]");
+    solar_os_shell_io_writeln(term, "  audio level [volume]");
+    solar_os_shell_io_writeln(term, "  audio mic [ms]");
     solar_os_shell_io_writeln(term, "  audio loopback [ms] [volume]");
     solar_os_shell_io_writeln(term, "  audio off");
 }
@@ -4112,10 +4113,42 @@ static void audio_cmd_tone(solar_os_shell_io_t *term, int argc, char **argv)
 
 static void audio_cmd_level(solar_os_shell_io_t *term, int argc, char **argv)
 {
+    solar_os_audio_status_t status;
+
+    if (argc > 3) {
+        solar_os_shell_io_writeln(term, "usage: audio level [volume]");
+        solar_os_shell_io_writeln(term, "volume: 0..100");
+        return;
+    }
+
+    if (argc == 2) {
+        solar_os_audio_get_status(&status);
+        solar_os_shell_io_printf(term, "speaker level: %u\n", (unsigned)status.volume);
+        return;
+    }
+
+    uint8_t volume = 0;
+    if (!parse_u8(argv[2], &volume) || volume > 100) {
+        solar_os_shell_io_writeln(term, "usage: audio level [volume]");
+        solar_os_shell_io_writeln(term, "volume: 0..100");
+        return;
+    }
+
+    const esp_err_t err = solar_os_audio_set_volume(volume);
+    if (err != ESP_OK) {
+        solar_os_shell_io_printf(term, "audio level failed: %s\n", esp_err_to_name(err));
+        return;
+    }
+
+    solar_os_shell_io_printf(term, "speaker level: %u\n", (unsigned)volume);
+}
+
+static void audio_cmd_mic(solar_os_shell_io_t *term, int argc, char **argv)
+{
     uint32_t duration_ms = 1000;
 
     if (argc > 3 || (argc == 3 && !audio_parse_duration(argv[2], &duration_ms))) {
-        solar_os_shell_io_writeln(term, "usage: audio level [ms]");
+        solar_os_shell_io_writeln(term, "usage: audio mic [ms]");
         solar_os_shell_io_printf(term,
                                  "ms: 1..%u\n",
                                  (unsigned)SOLAR_OS_AUDIO_TEST_MAX_MS);
@@ -4128,7 +4161,7 @@ static void audio_cmd_level(solar_os_shell_io_t *term, int argc, char **argv)
     solar_os_audio_level_t level;
     const esp_err_t err = solar_os_audio_measure_level(duration_ms, &level);
     if (err != ESP_OK) {
-        solar_os_shell_io_printf(term, "audio level failed: %s\n", esp_err_to_name(err));
+        solar_os_shell_io_printf(term, "audio mic failed: %s\n", esp_err_to_name(err));
         return;
     }
 
@@ -4186,6 +4219,8 @@ void solar_os_shell_cmd_audio(solar_os_context_t *ctx, int argc, char **argv)
         audio_cmd_tone(term, argc, argv);
     } else if (strcmp(argv[1], "level") == 0) {
         audio_cmd_level(term, argc, argv);
+    } else if (strcmp(argv[1], "mic") == 0) {
+        audio_cmd_mic(term, argc, argv);
     } else if (strcmp(argv[1], "loopback") == 0) {
         audio_cmd_loopback(term, argc, argv);
     } else if (strcmp(argv[1], "off") == 0) {

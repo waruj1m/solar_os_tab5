@@ -18,7 +18,6 @@
 
 #define CLOCK_ALARM_SOUND_TASK_STACK 4096
 #define CLOCK_ALARM_SOUND_TASK_PRIORITY (tskIDLE_PRIORITY + 2)
-#define CLOCK_ALARM_SOUND_VOLUME 55U
 #define CLOCK_DISPLAY_MAX_MINUTES 99U
 
 typedef enum {
@@ -43,6 +42,13 @@ typedef struct {
 
 static const char *TAG = "solar_os_clock";
 static clock_state_t clock_state;
+
+static uint8_t clock_sound_volume(void)
+{
+    solar_os_audio_status_t status;
+    solar_os_audio_get_status(&status);
+    return status.volume;
+}
 
 static uint32_t clock_now_ms(void)
 {
@@ -519,7 +525,7 @@ static void clock_alarm_sound_task(void *arg)
     while (!clock_state.alarm_sound_stop_requested) {
         if (init_err == ESP_OK) {
             for (int i = 0; i < 4 && !clock_state.alarm_sound_stop_requested; i++) {
-                (void)solar_os_audio_play_tone(1200, 70, CLOCK_ALARM_SOUND_VOLUME);
+                (void)solar_os_audio_play_tone(1200, 70, clock_sound_volume());
                 vTaskDelay(pdMS_TO_TICKS(45));
             }
         }

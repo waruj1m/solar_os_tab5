@@ -155,7 +155,7 @@ Hardware and sensors:
 - `pwm [status|set|off]`: generate LEDC PWM on runtime GPIOs.
 - `i2c [status|speed|scan|probe|read|write]`
 - `uart [status|baud|mode|write|read]`
-- `audio [status|tone|level|loopback|off]`
+- `audio [status|tone|level|mic|loopback|off]`: `level` shows/sets speaker volume; `mic` samples input level.
 - `date [YYYY-MM-DD]`
 - `time [HH:MM[:SS]]`
 - `ntp [server]`

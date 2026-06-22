@@ -269,6 +269,7 @@ static const char * const audio_subcommands[] = {
     "status",
     "tone",
     "level",
+    "mic",
     "loopback",
     "off",
 };

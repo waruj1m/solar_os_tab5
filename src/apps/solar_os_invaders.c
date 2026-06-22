@@ -40,7 +40,6 @@
 #define INVADERS_FIRE_MS 850U
 #define INVADERS_SOUND_QUEUE_LEN 8
 #define INVADERS_SOUND_STACK 8192
-#define INVADERS_SOUND_VOLUME 18U
 #define INVADERS_SOUND_STOP_MS 2000U
 
 typedef enum {
@@ -97,6 +96,13 @@ static const char *TAG = "solar_os_invaders";
 static invaders_state_t invaders;
 static invaders_audio_t invaders_audio;
 
+static uint8_t invaders_sound_volume(void)
+{
+    solar_os_audio_status_t status;
+    solar_os_audio_get_status(&status);
+    return status.volume;
+}
+
 static void invaders_sound_task(void *arg)
 {
     (void)arg;
@@ -120,23 +126,24 @@ static void invaders_sound_task(void *arg)
             continue;
         }
 
+        const uint8_t volume = invaders_sound_volume();
         switch (sound) {
         case INVADERS_SOUND_FIRE:
-            (void)solar_os_audio_play_tone(1400, 28, INVADERS_SOUND_VOLUME);
+            (void)solar_os_audio_play_tone(1400, 28, volume);
             break;
         case INVADERS_SOUND_HIT:
-            (void)solar_os_audio_play_tone(420, 45, INVADERS_SOUND_VOLUME);
+            (void)solar_os_audio_play_tone(420, 45, volume);
             break;
         case INVADERS_SOUND_PLAYER_HIT:
-            (void)solar_os_audio_play_tone(180, 80, INVADERS_SOUND_VOLUME);
+            (void)solar_os_audio_play_tone(180, 80, volume);
             break;
         case INVADERS_SOUND_WIN:
-            (void)solar_os_audio_play_tone(880, 55, INVADERS_SOUND_VOLUME);
-            (void)solar_os_audio_play_tone(1320, 70, INVADERS_SOUND_VOLUME);
+            (void)solar_os_audio_play_tone(880, 55, volume);
+            (void)solar_os_audio_play_tone(1320, 70, volume);
             break;
         case INVADERS_SOUND_GAME_OVER:
-            (void)solar_os_audio_play_tone(220, 80, INVADERS_SOUND_VOLUME);
-            (void)solar_os_audio_play_tone(120, 110, INVADERS_SOUND_VOLUME);
+            (void)solar_os_audio_play_tone(220, 80, volume);
+            (void)solar_os_audio_play_tone(120, 110, volume);
             break;
         default:
             break;
