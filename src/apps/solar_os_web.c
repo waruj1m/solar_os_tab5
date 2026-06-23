@@ -38,7 +38,7 @@
 #define WEB_CONTROL_VALUE_MAX 96
 #define WEB_FORM_COUNT 8
 #define WEB_IMAGE_COUNT 8
-#define WEB_IMAGE_MAX_BYTES (96U * 1024U)
+#define WEB_IMAGE_MAX_BYTES (512U * 1024U)
 #define WEB_IMAGE_MAX_PIXELS (480U * 320U)
 #define WEB_IMAGE_MAX_HEIGHT 112
 #define WEB_ITEM_COUNT (WEB_LINK_COUNT + WEB_CONTROL_COUNT)
@@ -417,6 +417,16 @@ static bool web_append_html(const uint8_t *data, size_t len)
     return true;
 }
 
+static bool web_http_event_is_redirect_body(esp_http_client_event_t *event)
+{
+    if (event == NULL || event->client == NULL) {
+        return false;
+    }
+
+    const int status = esp_http_client_get_status_code(event->client);
+    return status >= 300 && status < 400;
+}
+
 static esp_err_t web_http_event(esp_http_client_event_t *event)
 {
     if (event == NULL) {
@@ -427,6 +437,9 @@ static esp_err_t web_http_event(esp_http_client_event_t *event)
     }
 
     if (event->event_id == HTTP_EVENT_ON_DATA) {
+        if (web_http_event_is_redirect_body(event)) {
+            return ESP_OK;
+        }
         web_append_html((const uint8_t *)event->data, (size_t)event->data_len);
     }
     return ESP_OK;
@@ -1269,6 +1282,9 @@ static esp_err_t web_fetch_event(esp_http_client_event_t *event)
     if (event->event_id != HTTP_EVENT_ON_DATA) {
         return ESP_OK;
     }
+    if (web_http_event_is_redirect_body(event)) {
+        return ESP_OK;
+    }
 
     web_fetch_buffer_t *buffer = (web_fetch_buffer_t *)event->user_data;
     if (buffer == NULL || buffer->data == NULL || event->data == NULL || event->data_len <= 0) {
@@ -1378,6 +1394,191 @@ static bool web_bytes_are_webp(const uint8_t *data, size_t len)
         memcmp(data + 8, "WEBP", 4) == 0;
 }
 
+static bool web_detect_image_format(const uint8_t *data,
+                                    size_t len,
+                                    web_image_decoder_t *decoder,
+                                    const char **format)
+{
+    if (decoder != NULL) {
+        *decoder = WEB_IMAGE_DECODE_NONE;
+    }
+    if (format != NULL) {
+        *format = "image";
+    }
+    if (data == NULL || len < 2U) {
+        return false;
+    }
+
+    if (data[0] == 0xff && data[1] == 0xd8) {
+        if (decoder != NULL) {
+            *decoder = WEB_IMAGE_DECODE_STB;
+        }
+        if (format != NULL) {
+            *format = "JPEG";
+        }
+        return true;
+    }
+    if (len >= 8U &&
+        data[0] == 0x89 &&
+        data[1] == 'P' &&
+        data[2] == 'N' &&
+        data[3] == 'G' &&
+        data[4] == 0x0d &&
+        data[5] == 0x0a &&
+        data[6] == 0x1a &&
+        data[7] == 0x0a) {
+        if (decoder != NULL) {
+            *decoder = WEB_IMAGE_DECODE_STB;
+        }
+        if (format != NULL) {
+            *format = "PNG";
+        }
+        return true;
+    }
+    if (len >= 3U && memcmp(data, "GIF", 3) == 0) {
+        if (decoder != NULL) {
+            *decoder = WEB_IMAGE_DECODE_STB;
+        }
+        if (format != NULL) {
+            *format = "GIF";
+        }
+        return true;
+    }
+    if (web_bytes_are_webp(data, len)) {
+        if (decoder != NULL) {
+            *decoder = WEB_IMAGE_DECODE_WEBP;
+        }
+        if (format != NULL) {
+            *format = "WebP";
+        }
+        return true;
+    }
+    return false;
+}
+
+static bool web_url_ext_eq(const char *dot, const char *end, const char *ext)
+{
+    const size_t dot_len = (size_t)(end - dot);
+    return dot_len == strlen(ext) && strncasecmp(dot, ext, dot_len) == 0;
+}
+
+static bool web_url_looks_like_image(const char *url)
+{
+    if (url == NULL) {
+        return false;
+    }
+
+    const char *end = strpbrk(url, "?#");
+    if (end == NULL) {
+        end = url + strlen(url);
+    }
+    const char *dot = end;
+    while (dot > url && dot[-1] != '/' && dot[-1] != ':') {
+        dot--;
+        if (*dot == '.') {
+            return web_url_ext_eq(dot, end, ".jpg") ||
+                web_url_ext_eq(dot, end, ".jpeg") ||
+                web_url_ext_eq(dot, end, ".png") ||
+                web_url_ext_eq(dot, end, ".gif") ||
+                web_url_ext_eq(dot, end, ".webp");
+        }
+    }
+    return false;
+}
+
+static void web_apply_image_layout(web_image_t *image,
+                                   uint32_t width,
+                                   uint32_t height,
+                                   const char *src,
+                                   const char *format)
+{
+    image->width = width;
+    image->height = height;
+    image->loaded = true;
+
+    uint32_t draw_width = width;
+    uint32_t draw_height = height;
+    const uint32_t max_width = 400U - (2U * WEB_MARGIN_X);
+    if (draw_width > max_width) {
+        draw_height = (draw_height * max_width) / draw_width;
+        draw_width = max_width;
+    }
+    if (draw_height > WEB_IMAGE_MAX_HEIGHT) {
+        draw_width = (draw_width * WEB_IMAGE_MAX_HEIGHT) / draw_height;
+        draw_height = WEB_IMAGE_MAX_HEIGHT;
+    }
+    if (draw_width == 0) {
+        draw_width = 1;
+    }
+    if (draw_height == 0) {
+        draw_height = 1;
+    }
+    image->draw_width = (uint16_t)draw_width;
+    image->draw_height = (uint16_t)draw_height;
+    SOLAR_OS_LOGI(TAG,
+                  "%s image loaded %" PRIu32 "x%" PRIu32 " draw=%ux%u stack_high_water=%u src=%s",
+                  format != NULL ? format : "image",
+                  width,
+                  height,
+                  (unsigned)image->draw_width,
+                  (unsigned)image->draw_height,
+                  (unsigned)uxTaskGetStackHighWaterMark(NULL),
+                  src != NULL ? src : "");
+}
+
+static esp_err_t web_decode_image_bytes(web_image_t *image,
+                                        const uint8_t *data,
+                                        size_t len,
+                                        const char *src)
+{
+    if (image == NULL || data == NULL || len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint8_t *gray = NULL;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    web_image_decoder_t decoder = WEB_IMAGE_DECODE_STB;
+    const char *format = "image";
+    (void)web_detect_image_format(data, len, &decoder, &format);
+
+    esp_err_t err;
+    if (decoder == WEB_IMAGE_DECODE_WEBP) {
+        err = solar_os_webp_decode_gray(data,
+                                        len,
+                                        WEB_IMAGE_MAX_PIXELS,
+                                        &gray,
+                                        &width,
+                                        &height);
+    } else {
+        decoder = WEB_IMAGE_DECODE_STB;
+        err = solar_os_stb_decode_gray(data,
+                                       len,
+                                       WEB_IMAGE_MAX_PIXELS,
+                                       &gray,
+                                       &width,
+                                       &height);
+    }
+    if (err != ESP_OK || gray == NULL || width == 0 || height == 0) {
+        SOLAR_OS_LOGW(TAG,
+                      "%s image decode failed: %s src=%s reason=%s bytes=%u",
+                      format,
+                      esp_err_to_name(err),
+                      src != NULL ? src : "",
+                      decoder == WEB_IMAGE_DECODE_STB ?
+                          solar_os_stb_failure_reason() :
+                          "webp decode failed",
+                      (unsigned)len);
+        return err;
+    }
+
+    web_free_image_data(image);
+    image->gray = gray;
+    image->decoder = decoder;
+    web_apply_image_layout(image, width, height, src, format);
+    return ESP_OK;
+}
+
 static void web_update_image_line_heights(void)
 {
     if (web.lines == NULL || web.images == NULL) {
@@ -1423,75 +1624,93 @@ static void web_load_images(void)
         image->status_code = status_code;
         image->truncated = truncated;
         if (err != ESP_OK || data == NULL || len == 0) {
-            continue;
-        }
-
-        uint8_t *gray = NULL;
-        uint32_t width = 0;
-        uint32_t height = 0;
-        web_image_decoder_t decoder = WEB_IMAGE_DECODE_STB;
-        if (web_bytes_are_webp(data, len)) {
-            decoder = WEB_IMAGE_DECODE_WEBP;
-            err = solar_os_webp_decode_gray(data,
-                                            len,
-                                            WEB_IMAGE_MAX_PIXELS,
-                                            &gray,
-                                            &width,
-                                            &height);
-        } else {
-            err = solar_os_stb_decode_gray(data,
-                                           len,
-                                           WEB_IMAGE_MAX_PIXELS,
-                                           &gray,
-                                           &width,
-                                           &height);
-        }
-        heap_caps_free(data);
-        if (err != ESP_OK || gray == NULL || width == 0 || height == 0) {
             SOLAR_OS_LOGW(TAG,
-                          "image decode failed: %s src=%s reason=%s",
+                          "image fetch failed: %s status=%d truncated=%s max=%u src=%s",
                           esp_err_to_name(err),
-                          resolved,
-                          solar_os_stb_failure_reason());
+                          status_code,
+                          truncated ? "yes" : "no",
+                          (unsigned)WEB_IMAGE_MAX_BYTES,
+                          resolved);
             continue;
         }
 
-        image->gray = gray;
-        image->width = width;
-        image->height = height;
-        image->loaded = true;
-        image->decoder = decoder;
-
-        uint32_t draw_width = width;
-        uint32_t draw_height = height;
-        const uint32_t max_width = 400U - (2U * WEB_MARGIN_X);
-        if (draw_width > max_width) {
-            draw_height = (draw_height * max_width) / draw_width;
-            draw_width = max_width;
+        err = web_decode_image_bytes(image, data, len, resolved);
+        heap_caps_free(data);
+        if (err != ESP_OK) {
+            continue;
         }
-        if (draw_height > WEB_IMAGE_MAX_HEIGHT) {
-            draw_width = (draw_width * WEB_IMAGE_MAX_HEIGHT) / draw_height;
-            draw_height = WEB_IMAGE_MAX_HEIGHT;
-        }
-        if (draw_width == 0) {
-            draw_width = 1;
-        }
-        if (draw_height == 0) {
-            draw_height = 1;
-        }
-        image->draw_width = (uint16_t)draw_width;
-        image->draw_height = (uint16_t)draw_height;
-        SOLAR_OS_LOGI(TAG,
-                      "image loaded %" PRIu32 "x%" PRIu32 " draw=%ux%u stack_high_water=%u src=%s",
-                      width,
-                      height,
-                      (unsigned)image->draw_width,
-                      (unsigned)image->draw_height,
-                      (unsigned)uxTaskGetStackHighWaterMark(NULL),
-                      resolved);
     }
 
     web_update_image_line_heights();
+}
+
+static esp_err_t web_build_image_document(const uint8_t *data, size_t len, const char *src)
+{
+    if (data == NULL || len == 0 || src == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    web.line_count = 0;
+    web.link_count = 0;
+    web.control_count = 0;
+    web.form_count = 0;
+    web.image_count = 0;
+    web.item_count = 0;
+
+    const int image_index = web_add_image(src, "image");
+    if (image_index < 0) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    esp_err_t err = web_decode_image_bytes(&web.images[image_index], data, len, src);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    web_add_image_line(image_index, -1);
+    web_update_image_line_heights();
+    web_rebuild_items();
+    return ESP_OK;
+}
+
+static esp_err_t web_load_direct_image_document(uint32_t *out_bytes,
+                                                bool *out_truncated,
+                                                int *out_status)
+{
+    uint8_t *data = NULL;
+    size_t len = 0;
+    bool truncated = false;
+    int status_code = -1;
+    esp_err_t err = web_fetch_bytes(web.url,
+                                    WEB_IMAGE_MAX_BYTES,
+                                    &data,
+                                    &len,
+                                    &truncated,
+                                    &status_code);
+    if (out_bytes != NULL) {
+        *out_bytes = (uint32_t)len;
+    }
+    if (out_truncated != NULL) {
+        *out_truncated = truncated;
+    }
+    if (out_status != NULL) {
+        *out_status = status_code;
+    }
+    if (err != ESP_OK || data == NULL || len == 0) {
+        SOLAR_OS_LOGW(TAG,
+                      "direct image fetch failed: %s status=%d truncated=%s max=%u src=%s",
+                      esp_err_to_name(err),
+                      status_code,
+                      truncated ? "yes" : "no",
+                      (unsigned)WEB_IMAGE_MAX_BYTES,
+                      web.url);
+        heap_caps_free(data);
+        return err;
+    }
+
+    err = web_build_image_document(data, len, web.url);
+    heap_caps_free(data);
+    return err;
 }
 
 static void web_task(void *arg)
@@ -1503,6 +1722,35 @@ static void web_task(void *arg)
     web.html_truncated = false;
     if (web.html != NULL) {
         web.html[0] = '\0';
+    }
+
+    esp_http_client_handle_t client = NULL;
+    if (web_url_looks_like_image(web.url)) {
+        web_send_message(WEB_EVENT_STATUS, "image");
+        uint32_t bytes_read = 0;
+        bool truncated = false;
+        int status_code = -1;
+        const esp_err_t image_err =
+            web_load_direct_image_document(&bytes_read, &truncated, &status_code);
+        if (image_err == ESP_OK) {
+            web_event_t event = {
+                .type = WEB_EVENT_DONE,
+                .status_code = status_code,
+                .bytes_read = bytes_read,
+                .truncated = truncated,
+            };
+            (void)web_send_event(&event);
+        } else {
+            web_event_t event = {
+                .type = WEB_EVENT_ERROR,
+                .status_code = status_code,
+                .bytes_read = bytes_read,
+                .truncated = truncated,
+            };
+            snprintf(event.message, sizeof(event.message), "%s", esp_err_to_name(image_err));
+            (void)web_send_event(&event);
+        }
+        goto done;
     }
 
     esp_http_client_config_t config = {
@@ -1520,7 +1768,7 @@ static void web_task(void *arg)
 #endif
 
     SOLAR_OS_LOGI(TAG, "GET %s", web.url);
-    esp_http_client_handle_t client = esp_http_client_init(&config);
+    client = esp_http_client_init(&config);
     if (client == NULL) {
         web_send_message(WEB_EVENT_ERROR, "HTTP client init failed");
         goto done;
@@ -1543,9 +1791,25 @@ static void web_task(void *arg)
         (void)web_send_event(&event);
     } else {
         web_send_message(WEB_EVENT_STATUS, "rendering");
-        web_parse_html();
-        if (web.image_count > 0) {
-            web_load_images();
+        web_image_decoder_t decoder = WEB_IMAGE_DECODE_NONE;
+        if (web_detect_image_format(web.html, web.html_len, &decoder, NULL)) {
+            const esp_err_t image_err = web_build_image_document(web.html, web.html_len, web.url);
+            if (image_err != ESP_OK) {
+                web_event_t event = {
+                    .type = WEB_EVENT_ERROR,
+                    .status_code = web.status_code,
+                    .bytes_read = web.bytes_read,
+                    .truncated = web.html_truncated,
+                };
+                snprintf(event.message, sizeof(event.message), "%s", esp_err_to_name(image_err));
+                (void)web_send_event(&event);
+                goto done;
+            }
+        } else {
+            web_parse_html();
+            if (web.image_count > 0) {
+                web_load_images();
+            }
         }
         web_event_t event = {
             .type = WEB_EVENT_DONE,
