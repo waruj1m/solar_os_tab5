@@ -758,39 +758,84 @@ static bool is_keyboard_like(uint16_t appearance, const char *name)
            contains_ci(name, "keychron");
 }
 
+static solar_os_ble_keyboard_scan_result_t *scan_result_slot(const uint8_t *bda)
+{
+    if (active_scan_results == NULL || active_scan_max_results == 0 || bda == NULL) {
+        return NULL;
+    }
+
+    for (size_t i = 0; i < active_scan_result_count; i++) {
+        if (memcmp(active_scan_results[i].bda, bda, sizeof(active_scan_results[i].bda)) == 0) {
+            return &active_scan_results[i];
+        }
+    }
+
+    if (active_scan_result_count >= active_scan_max_results) {
+        return NULL;
+    }
+
+    return &active_scan_results[active_scan_result_count++];
+}
+
 static void collect_scan_result(const uint8_t *bda,
                                 esp_ble_addr_type_t addr_type,
                                 int8_t rssi,
                                 uint16_t appearance,
+                                bool hid_service,
                                 bool keyboard_like,
                                 const char *name)
 {
-    if (active_scan_results == NULL || active_scan_max_results == 0 || bda == NULL) {
-        return;
-    }
-
-    solar_os_ble_keyboard_scan_result_t *slot = NULL;
-    for (size_t i = 0; i < active_scan_result_count; i++) {
-        if (memcmp(active_scan_results[i].bda, bda, sizeof(active_scan_results[i].bda)) == 0) {
-            slot = &active_scan_results[i];
-            break;
-        }
-    }
-
+    solar_os_ble_keyboard_scan_result_t *slot = scan_result_slot(bda);
     if (slot == NULL) {
-        if (active_scan_result_count >= active_scan_max_results) {
-            return;
-        }
-        slot = &active_scan_results[active_scan_result_count++];
+        return;
     }
 
     memcpy(slot->bda, bda, sizeof(slot->bda));
     slot->addr_type = (uint8_t)addr_type;
     slot->rssi = rssi;
     slot->appearance = appearance;
-    slot->keyboard_like = keyboard_like;
-    slot->remembered = bda_matches_remembered_peer(bda) || name_matches_remembered_peer(name);
-    strlcpy(slot->name, name != NULL ? name : "", sizeof(slot->name));
+    slot->hid_service = slot->hid_service || hid_service;
+    slot->keyboard_like = slot->keyboard_like || keyboard_like;
+    slot->remembered = slot->remembered ||
+        bda_matches_remembered_peer(bda) ||
+        name_matches_remembered_peer(name);
+    if (name != NULL && name[0] != '\0') {
+        strlcpy(slot->name, name, sizeof(slot->name));
+    }
+}
+
+static void collect_connected_scan_result(void)
+{
+    if (!connected || connected_dev == NULL) {
+        return;
+    }
+
+    const uint8_t *bda = esp_hidh_dev_bda_get(connected_dev);
+    if (bda == NULL) {
+        return;
+    }
+
+    solar_os_ble_keyboard_scan_result_t *slot = scan_result_slot(bda);
+    if (slot == NULL) {
+        return;
+    }
+
+    const char *name = esp_hidh_dev_name_get(connected_dev);
+    if (name == NULL || name[0] == '\0') {
+        name = connected_name;
+    }
+
+    memcpy(slot->bda, bda, sizeof(slot->bda));
+    slot->addr_type = remembered_peer_valid() && bda_matches_remembered_peer(bda) ?
+        remembered_peer.addr_type :
+        (uint8_t)pending_addr_type;
+    slot->rssi = 0;
+    slot->appearance = ESP_HID_APPEARANCE_KEYBOARD;
+    slot->hid_service = true;
+    slot->keyboard_like = true;
+    slot->remembered = true;
+    slot->connected = true;
+    strlcpy(slot->name, name != NULL && name[0] != '\0' ? name : "keyboard", sizeof(slot->name));
 }
 
 static void consider_candidate(const esp_ble_gap_cb_param_t *param)
@@ -806,6 +851,16 @@ static void consider_candidate(const esp_ble_gap_cb_param_t *param)
     adv_name(adv_data, adv_len, name, sizeof(name));
 
     const bool keyboard_like = is_keyboard_like(appearance, name);
+    if (!scan_remembered_only) {
+        collect_scan_result(param->scan_rst.bda,
+                            param->scan_rst.ble_addr_type,
+                            param->scan_rst.rssi,
+                            appearance,
+                            has_hid_service,
+                            keyboard_like,
+                            name);
+    }
+
     if (!has_hid_service && !keyboard_like) {
         return;
     }
@@ -816,12 +871,15 @@ static void consider_candidate(const esp_ble_gap_cb_param_t *param)
         return;
     }
 
-    collect_scan_result(param->scan_rst.bda,
-                        param->scan_rst.ble_addr_type,
-                        param->scan_rst.rssi,
-                        appearance,
-                        keyboard_like,
-                        name);
+    if (scan_remembered_only) {
+        collect_scan_result(param->scan_rst.bda,
+                            param->scan_rst.ble_addr_type,
+                            param->scan_rst.rssi,
+                            appearance,
+                            has_hid_service,
+                            keyboard_like,
+                            name);
+    }
 
     if (candidate.valid &&
         (!keyboard_like || candidate.keyboard_like) &&
@@ -1726,6 +1784,7 @@ esp_err_t solar_os_ble_keyboard_scan(solar_os_ble_keyboard_scan_result_t *result
     active_scan_results = results;
     active_scan_max_results = max_results;
     active_scan_result_count = 0;
+    collect_connected_scan_result();
 
     const esp_err_t ret = run_keyboard_scan(false);
 

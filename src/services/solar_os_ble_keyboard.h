@@ -8,7 +8,7 @@
 #include "solar_os_keys.h"
 
 #define SOLAR_OS_BLE_KEYBOARD_NAME_MAX 64
-#define SOLAR_OS_BLE_KEYBOARD_SCAN_MAX_RESULTS 12
+#define SOLAR_OS_BLE_KEYBOARD_SCAN_MAX_RESULTS 32
 #define SOLAR_OS_BLE_KEYBOARD_REPEAT_RATE_MIN 1U
 #define SOLAR_OS_BLE_KEYBOARD_REPEAT_RATE_MAX 60U
 #define SOLAR_OS_BLE_KEYBOARD_REPEAT_DELAY_MIN_MS 100U
@@ -24,8 +24,10 @@ typedef struct {
     uint8_t addr_type;
     int8_t rssi;
     uint16_t appearance;
+    bool hid_service;
     bool keyboard_like;
     bool remembered;
+    bool connected;
     char name[SOLAR_OS_BLE_KEYBOARD_NAME_MAX];
 } solar_os_ble_keyboard_scan_result_t;
 

@@ -2789,7 +2789,7 @@ static void ble_cmd_scan(solar_os_shell_io_t *term)
                                                      &found);
     ble_set_scan_indicator(term, false);
     if (err == ESP_ERR_NOT_FOUND || found == 0) {
-        solar_os_shell_io_writeln(term, "no BLE HID keyboards found");
+        solar_os_shell_io_writeln(term, "no BLE devices found");
         return;
     }
     if (err != ESP_OK) {
@@ -2800,18 +2800,26 @@ static void ble_cmd_scan(solar_os_shell_io_t *term)
     solar_os_shell_io_writeln(term, "RSSI Type       Address           Appr   Flags Name");
     for (size_t i = 0; i < found; i++) {
         char bda[18];
+        char rssi[8];
         ble_format_bda(results[i].bda, bda, sizeof(bda));
+        if (results[i].connected) {
+            strlcpy(rssi, "conn", sizeof(rssi));
+        } else {
+            snprintf(rssi, sizeof(rssi), "%d", (int)results[i].rssi);
+        }
         solar_os_shell_io_printf(term,
-                                 "%4d %-10s %-17s 0x%04x %c%c    %s\n",
-                                 (int)results[i].rssi,
+                                 "%4s %-10s %-17s 0x%04x %c%c%c%c  %s\n",
+                                 rssi,
                                  solar_os_ble_keyboard_addr_type_name(results[i].addr_type),
                                  bda,
                                  results[i].appearance,
+                                 results[i].connected ? 'c' : '-',
+                                 results[i].hid_service ? 'h' : '-',
                                  results[i].keyboard_like ? 'k' : '-',
                                  results[i].remembered ? '*' : '-',
                                  results[i].name[0] ? results[i].name : "(unnamed)");
     }
-    solar_os_shell_io_writeln(term, "flags: k=keyboard-like *=remembered");
+    solar_os_shell_io_writeln(term, "flags: c=connected h=HID k=keyboard-like *=remembered");
 }
 
 void solar_os_shell_cmd_ble(solar_os_context_t *ctx, int argc, char **argv)
