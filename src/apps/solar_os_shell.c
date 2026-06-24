@@ -1866,6 +1866,7 @@ static bool shell_is_path_command(const char *command)
            strcmp(command, "edit") == 0 ||
            strcmp(command, "less") == 0 ||
            strcmp(command, "reader") == 0 ||
+           strcmp(command, "sheet") == 0 ||
 #endif
 #if SOLAR_OS_PACKAGE_PYTHON
            strcmp(command, "python") == 0 ||
@@ -3652,7 +3653,8 @@ static bool shell_execute_line(solar_os_context_t *ctx,
 
         if ((strcmp(app->name, "edit") == 0 ||
              strcmp(app->name, "less") == 0 ||
-             strcmp(app->name, "reader") == 0) &&
+             strcmp(app->name, "reader") == 0 ||
+             strcmp(app->name, "sheet") == 0) &&
             argc >= 2) {
             if (!resolve_path_for_command(ctx, terminal(ctx),
                                           app->name,
