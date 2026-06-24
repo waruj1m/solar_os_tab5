@@ -30,7 +30,7 @@ Lua mirrors the Python `solaros` module structure:
 - `solaros.time`: `uptime_ms`, `uptime`, `datetime`, `utc_datetime`, `set_datetime`, `set_utc_datetime`, `utc_to_local`, `local_to_utc`, `is_valid`, `timezone`, `set_timezone`, `ntp_sync`
 - `solaros.battery`: `status`
 - `solaros.sensors`: `environment`
-- `solaros.wifi`: `status`, `status_text`, `start`, `stop`, `connect`, `connect_saved`, `disconnect`, `forget`, `scan`, `ap_start`, `ap_stop`, `nat`
+- `solaros.wifi`: `status`, `status_text`, `start`, `stop`, `connect`, `connect_saved`, `disconnect`, `forget`, `forget_ssid`, `forget_all`, `known`, `scan`, `ap_start`, `ap_stop`, `nat`
 - `solaros.mqtt`: `status`, `connect`, `disconnect`, `publish`, `subscribe`, `read` when the `net` package is compiled
 - `solaros.gpio`: constants `INPUT`, `OUTPUT`, `PULL_NONE`, `PULL_UP`, `PULL_DOWN`; functions `pins`, `allowed`, `mode`, `configure`, `read`, `write`
 - `solaros.adc`: `pins`, `read`

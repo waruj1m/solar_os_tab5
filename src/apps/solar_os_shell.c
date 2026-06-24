@@ -198,6 +198,7 @@ static const char * const wifi_subcommands[] = {
     "scan",
     "connect",
     "disconnect",
+    "known",
     "forget",
     "nat",
 };

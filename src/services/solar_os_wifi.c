@@ -27,6 +27,15 @@ static const char *TAG = "solar_os_wifi";
 #define WIFI_AP_NVS_AUTH_KEY "auth"
 #define WIFI_NAT_NVS_NAMESPACE "wifi_nat"
 #define WIFI_NAT_NVS_ENABLED_KEY "enabled"
+#define WIFI_STA_NVS_NAMESPACE "wifi_sta"
+#define WIFI_STA_NVS_COUNT_KEY "count"
+#define WIFI_STA_NVS_SSID_PREFIX "ssid"
+#define WIFI_STA_NVS_PASSWORD_PREFIX "pass"
+
+typedef struct {
+    char ssid[SOLAR_OS_WIFI_SSID_MAX + 1];
+    char password[SOLAR_OS_WIFI_PASSWORD_MAX];
+} wifi_profile_t;
 
 static SemaphoreHandle_t wifi_mutex;
 static esp_netif_t *wifi_sta_netif;
@@ -45,6 +54,8 @@ static bool wifi_ap_running;
 static solar_os_wifi_state_t wifi_state = SOLAR_OS_WIFI_STATE_OFF;
 static char wifi_ssid[SOLAR_OS_WIFI_SSID_MAX + 1];
 static char wifi_saved_ssid[SOLAR_OS_WIFI_SSID_MAX + 1];
+static wifi_profile_t wifi_profiles[SOLAR_OS_WIFI_PROFILE_MAX];
+static size_t wifi_profile_count;
 static char wifi_saved_ap_ssid[SOLAR_OS_WIFI_SSID_MAX + 1];
 static char wifi_saved_ap_password[SOLAR_OS_WIFI_PASSWORD_MAX];
 static char wifi_saved_ap_auth[SOLAR_OS_WIFI_AUTH_MAX];
@@ -211,6 +222,339 @@ static esp_err_t wifi_validate_ap_settings(const char *ssid,
     if (authmode != NULL) {
         *authmode = selected_auth;
     }
+    return ESP_OK;
+}
+
+static esp_err_t wifi_validate_station_settings(const char *ssid, const char *password)
+{
+    if (ssid == NULL || ssid[0] == '\0' || strlen(ssid) > SOLAR_OS_WIFI_SSID_MAX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (password != NULL && strlen(password) >= SOLAR_OS_WIFI_PASSWORD_MAX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return ESP_OK;
+}
+
+static void wifi_sta_nvs_key(char *key, size_t key_len, const char *prefix, size_t index)
+{
+    if (key == NULL || key_len == 0) {
+        return;
+    }
+    snprintf(key, key_len, "%s%u", prefix, (unsigned)index);
+}
+
+static void wifi_refresh_saved_config_locked(void)
+{
+    if (wifi_profile_count > 0) {
+        wifi_has_saved_config = true;
+        strlcpy(wifi_saved_ssid, wifi_profiles[0].ssid, sizeof(wifi_saved_ssid));
+    } else {
+        wifi_has_saved_config = false;
+        wifi_saved_ssid[0] = '\0';
+    }
+}
+
+static void wifi_clear_profiles_locked(void)
+{
+    memset(wifi_profiles, 0, sizeof(wifi_profiles));
+    wifi_profile_count = 0;
+    wifi_refresh_saved_config_locked();
+}
+
+static int wifi_find_profile_index_locked(const char *ssid)
+{
+    if (ssid == NULL || ssid[0] == '\0') {
+        return -1;
+    }
+    for (size_t i = 0; i < wifi_profile_count; i++) {
+        if (strcmp(wifi_profiles[i].ssid, ssid) == 0) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+static esp_err_t wifi_save_profiles(void)
+{
+    wifi_profile_t profiles[SOLAR_OS_WIFI_PROFILE_MAX];
+    size_t count = 0;
+
+    wifi_lock();
+    count = wifi_profile_count;
+    memcpy(profiles, wifi_profiles, sizeof(profiles));
+    wifi_unlock();
+
+    nvs_handle_t nvs;
+    esp_err_t ret = nvs_open(WIFI_STA_NVS_NAMESPACE, NVS_READWRITE, &nvs);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ret = nvs_set_u8(nvs, WIFI_STA_NVS_COUNT_KEY, (uint8_t)count);
+    for (size_t i = 0; ret == ESP_OK && i < SOLAR_OS_WIFI_PROFILE_MAX; i++) {
+        char ssid_key[12];
+        char password_key[12];
+        wifi_sta_nvs_key(ssid_key, sizeof(ssid_key), WIFI_STA_NVS_SSID_PREFIX, i);
+        wifi_sta_nvs_key(password_key, sizeof(password_key), WIFI_STA_NVS_PASSWORD_PREFIX, i);
+        if (i < count) {
+            ret = nvs_set_str(nvs, ssid_key, profiles[i].ssid);
+            if (ret == ESP_OK) {
+                ret = nvs_set_str(nvs, password_key, profiles[i].password);
+            }
+        } else {
+            esp_err_t erase_ret = nvs_erase_key(nvs, ssid_key);
+            if (erase_ret != ESP_OK && erase_ret != ESP_ERR_NVS_NOT_FOUND) {
+                ret = erase_ret;
+                break;
+            }
+            erase_ret = nvs_erase_key(nvs, password_key);
+            if (erase_ret != ESP_OK && erase_ret != ESP_ERR_NVS_NOT_FOUND) {
+                ret = erase_ret;
+                break;
+            }
+        }
+    }
+    if (ret == ESP_OK) {
+        ret = nvs_commit(nvs);
+    }
+    nvs_close(nvs);
+    return ret;
+}
+
+static esp_err_t wifi_load_profiles(void)
+{
+    nvs_handle_t nvs;
+    esp_err_t ret = nvs_open(WIFI_STA_NVS_NAMESPACE, NVS_READONLY, &nvs);
+    if (ret == ESP_ERR_NVS_NOT_FOUND) {
+        wifi_lock();
+        wifi_clear_profiles_locked();
+        wifi_unlock();
+        return ESP_OK;
+    }
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    uint8_t stored_count = 0;
+    ret = nvs_get_u8(nvs, WIFI_STA_NVS_COUNT_KEY, &stored_count);
+    if (ret == ESP_ERR_NVS_NOT_FOUND) {
+        stored_count = 0;
+        ret = ESP_OK;
+    }
+
+    wifi_profile_t profiles[SOLAR_OS_WIFI_PROFILE_MAX] = {0};
+    size_t count = 0;
+    const size_t max_count = stored_count > SOLAR_OS_WIFI_PROFILE_MAX ?
+        SOLAR_OS_WIFI_PROFILE_MAX :
+        stored_count;
+
+    for (size_t i = 0; ret == ESP_OK && i < max_count; i++) {
+        char ssid_key[12];
+        char password_key[12];
+        char ssid[SOLAR_OS_WIFI_SSID_MAX + 1] = {0};
+        char password[SOLAR_OS_WIFI_PASSWORD_MAX] = {0};
+        size_t len = sizeof(ssid);
+        wifi_sta_nvs_key(ssid_key, sizeof(ssid_key), WIFI_STA_NVS_SSID_PREFIX, i);
+        wifi_sta_nvs_key(password_key, sizeof(password_key), WIFI_STA_NVS_PASSWORD_PREFIX, i);
+
+        esp_err_t item_ret = nvs_get_str(nvs, ssid_key, ssid, &len);
+        if (item_ret == ESP_ERR_NVS_NOT_FOUND) {
+            continue;
+        }
+        if (item_ret != ESP_OK) {
+            ret = item_ret;
+            break;
+        }
+
+        len = sizeof(password);
+        item_ret = nvs_get_str(nvs, password_key, password, &len);
+        if (item_ret == ESP_ERR_NVS_NOT_FOUND) {
+            password[0] = '\0';
+        } else if (item_ret != ESP_OK) {
+            ret = item_ret;
+            break;
+        }
+
+        if (wifi_validate_station_settings(ssid, password) == ESP_OK) {
+            strlcpy(profiles[count].ssid, ssid, sizeof(profiles[count].ssid));
+            strlcpy(profiles[count].password, password, sizeof(profiles[count].password));
+            count++;
+        }
+    }
+    nvs_close(nvs);
+
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    wifi_lock();
+    memset(wifi_profiles, 0, sizeof(wifi_profiles));
+    memcpy(wifi_profiles, profiles, sizeof(profiles));
+    wifi_profile_count = count;
+    wifi_refresh_saved_config_locked();
+    wifi_unlock();
+    return ESP_OK;
+}
+
+static esp_err_t wifi_program_station_config(const wifi_profile_t *profile)
+{
+    wifi_config_t config = {0};
+    if (profile != NULL) {
+        memcpy(config.sta.ssid, profile->ssid, strlen(profile->ssid));
+        memcpy(config.sta.password, profile->password, strlen(profile->password));
+        config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+        config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+        config.sta.failure_retry_cnt = 3;
+    }
+    return esp_wifi_set_config(WIFI_IF_STA, &config);
+}
+
+static esp_err_t wifi_migrate_legacy_station_config(void)
+{
+    wifi_lock();
+    const bool has_profiles = wifi_profile_count > 0;
+    wifi_unlock();
+    if (has_profiles) {
+        return ESP_OK;
+    }
+
+    wifi_config_t config = {0};
+    esp_err_t ret = esp_wifi_get_config(WIFI_IF_STA, &config);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    char ssid[SOLAR_OS_WIFI_SSID_MAX + 1] = {0};
+    char password[SOLAR_OS_WIFI_PASSWORD_MAX] = {0};
+    wifi_copy_ssid(ssid, sizeof(ssid), config.sta.ssid, sizeof(config.sta.ssid));
+    wifi_copy_ssid(password, sizeof(password), config.sta.password, sizeof(config.sta.password));
+    if (ssid[0] == '\0' || wifi_validate_station_settings(ssid, password) != ESP_OK) {
+        return ESP_OK;
+    }
+
+    wifi_lock();
+    if (wifi_profile_count == 0) {
+        strlcpy(wifi_profiles[0].ssid, ssid, sizeof(wifi_profiles[0].ssid));
+        strlcpy(wifi_profiles[0].password, password, sizeof(wifi_profiles[0].password));
+        wifi_profile_count = 1;
+        wifi_refresh_saved_config_locked();
+    }
+    wifi_unlock();
+
+    ret = wifi_save_profiles();
+    if (ret == ESP_OK) {
+        SOLAR_OS_LOGI(TAG, "migrated saved Wi-Fi network %s", ssid);
+    }
+    return ret;
+}
+
+static esp_err_t wifi_upsert_profile(const char *ssid, const char *password)
+{
+    if (password == NULL) {
+        password = "";
+    }
+
+    wifi_profile_t profile = {0};
+    strlcpy(profile.ssid, ssid, sizeof(profile.ssid));
+    strlcpy(profile.password, password, sizeof(profile.password));
+
+    wifi_lock();
+    int existing = wifi_find_profile_index_locked(ssid);
+    if (existing == 0 && strcmp(wifi_profiles[0].password, password) == 0) {
+        wifi_refresh_saved_config_locked();
+        wifi_unlock();
+        return ESP_OK;
+    }
+    if (existing < 0 && wifi_profile_count >= SOLAR_OS_WIFI_PROFILE_MAX) {
+        existing = (int)wifi_profile_count - 1;
+    }
+    if (existing > 0) {
+        memmove(&wifi_profiles[1],
+                &wifi_profiles[0],
+                (size_t)existing * sizeof(wifi_profiles[0]));
+    } else if (existing < 0 && wifi_profile_count > 0) {
+        memmove(&wifi_profiles[1],
+                &wifi_profiles[0],
+                wifi_profile_count * sizeof(wifi_profiles[0]));
+    }
+    wifi_profiles[0] = profile;
+    if (existing < 0 && wifi_profile_count < SOLAR_OS_WIFI_PROFILE_MAX) {
+        wifi_profile_count++;
+    }
+    wifi_refresh_saved_config_locked();
+    wifi_unlock();
+
+    return wifi_save_profiles();
+}
+
+static esp_err_t wifi_select_saved_profile(wifi_profile_t *selected)
+{
+    if (selected == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    wifi_profile_t profiles[SOLAR_OS_WIFI_PROFILE_MAX];
+    size_t count = 0;
+
+    wifi_lock();
+    count = wifi_profile_count;
+    memcpy(profiles, wifi_profiles, sizeof(profiles));
+    wifi_unlock();
+
+    if (count == 0) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    if (count == 1) {
+        *selected = profiles[0];
+        return ESP_OK;
+    }
+
+    wifi_lock();
+    const solar_os_wifi_state_t previous_state = wifi_state;
+    wifi_state = SOLAR_OS_WIFI_STATE_SCANNING;
+    wifi_unlock();
+
+    esp_err_t ret = esp_wifi_scan_start(NULL, true);
+    if (ret != ESP_OK) {
+        wifi_lock();
+        wifi_state = previous_state;
+        wifi_unlock();
+        *selected = profiles[0];
+        return ESP_OK;
+    }
+
+    uint16_t record_count = SOLAR_OS_WIFI_SCAN_MAX_RESULTS;
+    wifi_ap_record_t records[SOLAR_OS_WIFI_SCAN_MAX_RESULTS] = {0};
+    ret = esp_wifi_scan_get_ap_records(&record_count, records);
+
+    wifi_lock();
+    wifi_state = previous_state;
+    wifi_unlock();
+
+    if (ret != ESP_OK) {
+        *selected = profiles[0];
+        return ESP_OK;
+    }
+
+    int best_index = -1;
+    int8_t best_rssi = INT8_MIN;
+    for (uint16_t record_index = 0; record_index < record_count; record_index++) {
+        char ssid[SOLAR_OS_WIFI_SSID_MAX + 1] = {0};
+        wifi_copy_ssid(ssid, sizeof(ssid), records[record_index].ssid, sizeof(records[record_index].ssid));
+        if (ssid[0] == '\0') {
+            continue;
+        }
+        for (size_t profile_index = 0; profile_index < count; profile_index++) {
+            if (strcmp(profiles[profile_index].ssid, ssid) == 0 &&
+                (best_index < 0 || records[record_index].rssi > best_rssi)) {
+                best_index = (int)profile_index;
+                best_rssi = records[record_index].rssi;
+            }
+        }
+    }
+
+    *selected = profiles[best_index >= 0 ? (size_t)best_index : 0];
     return ESP_OK;
 }
 
@@ -581,21 +925,8 @@ static esp_err_t wifi_apply_mode(void)
 
 static void wifi_update_saved_config(void)
 {
-    if (!wifi_initialized) {
-        return;
-    }
-
-    wifi_config_t config = {0};
-    const esp_err_t err = esp_wifi_get_config(WIFI_IF_STA, &config);
-
     wifi_lock();
-    if (err == ESP_OK && config.sta.ssid[0] != '\0') {
-        wifi_copy_ssid(wifi_saved_ssid, sizeof(wifi_saved_ssid), config.sta.ssid, sizeof(config.sta.ssid));
-        wifi_has_saved_config = wifi_saved_ssid[0] != '\0';
-    } else {
-        wifi_saved_ssid[0] = '\0';
-        wifi_has_saved_config = false;
-    }
+    wifi_refresh_saved_config_locked();
     wifi_unlock();
 }
 
@@ -904,6 +1235,14 @@ esp_err_t solar_os_wifi_init(void)
     if (ret != ESP_OK) {
         SOLAR_OS_LOGW(TAG, "saved AP config load failed: %s", esp_err_to_name(ret));
     }
+    ret = wifi_load_profiles();
+    if (ret != ESP_OK) {
+        SOLAR_OS_LOGW(TAG, "Wi-Fi profile load failed: %s", esp_err_to_name(ret));
+    }
+    ret = wifi_migrate_legacy_station_config();
+    if (ret != ESP_OK) {
+        SOLAR_OS_LOGW(TAG, "legacy Wi-Fi config migration failed: %s", esp_err_to_name(ret));
+    }
     ret = wifi_load_nat_config();
     if (ret != ESP_OK) {
         SOLAR_OS_LOGW(TAG, "NAT config load failed: %s", esp_err_to_name(ret));
@@ -959,33 +1298,29 @@ esp_err_t solar_os_wifi_stop(void)
 
 esp_err_t solar_os_wifi_connect(const char *ssid, const char *password)
 {
-    if (ssid == NULL || ssid[0] == '\0' || strlen(ssid) > SOLAR_OS_WIFI_SSID_MAX) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (password != NULL && strlen(password) >= SOLAR_OS_WIFI_PASSWORD_MAX) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    esp_err_t ret = solar_os_wifi_start();
+    esp_err_t ret = wifi_validate_station_settings(ssid, password);
     if (ret != ESP_OK) {
         return ret;
     }
-
-    wifi_config_t config = {0};
-    memcpy(config.sta.ssid, ssid, strlen(ssid));
-    if (password != NULL) {
-        memcpy(config.sta.password, password, strlen(password));
+    if (password == NULL) {
+        password = "";
     }
-    config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
-    config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
-    config.sta.failure_retry_cnt = 3;
+
+    ret = solar_os_wifi_start();
+    if (ret != ESP_OK) {
+        return ret;
+    }
 
     wifi_lock();
     wifi_sta_enabled = true;
     wifi_unlock();
 
+    wifi_profile_t profile = {0};
+    strlcpy(profile.ssid, ssid, sizeof(profile.ssid));
+    strlcpy(profile.password, password, sizeof(profile.password));
+
     wifi_disconnect_for_reconfig();
-    ret = esp_wifi_set_config(WIFI_IF_STA, &config);
+    ret = wifi_program_station_config(&profile);
     if (ret != ESP_OK) {
         wifi_lock();
         wifi_state = SOLAR_OS_WIFI_STATE_FAILED;
@@ -993,10 +1328,14 @@ esp_err_t solar_os_wifi_connect(const char *ssid, const char *password)
         return ret;
     }
 
+    ret = wifi_upsert_profile(ssid, password);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
     wifi_lock();
-    wifi_copy_ssid(wifi_ssid, sizeof(wifi_ssid), config.sta.ssid, sizeof(config.sta.ssid));
-    strlcpy(wifi_saved_ssid, wifi_ssid, sizeof(wifi_saved_ssid));
-    wifi_has_saved_config = wifi_saved_ssid[0] != '\0';
+    strlcpy(wifi_ssid, ssid, sizeof(wifi_ssid));
+    wifi_refresh_saved_config_locked();
     wifi_has_ip = false;
     wifi_state = SOLAR_OS_WIFI_STATE_CONNECTING;
     wifi_unlock();
@@ -1019,22 +1358,29 @@ esp_err_t solar_os_wifi_connect_saved(void)
         return ret;
     }
 
-    wifi_config_t config = {0};
-    ret = esp_wifi_get_config(WIFI_IF_STA, &config);
+    wifi_profile_t profile = {0};
+    ret = wifi_select_saved_profile(&profile);
     if (ret != ESP_OK) {
         return ret;
     }
 
-    char ssid[SOLAR_OS_WIFI_SSID_MAX + 1];
-    wifi_copy_ssid(ssid, sizeof(ssid), config.sta.ssid, sizeof(config.sta.ssid));
-    if (ssid[0] == '\0') {
-        return ESP_ERR_NOT_FOUND;
+    wifi_disconnect_for_reconfig();
+    ret = wifi_program_station_config(&profile);
+    if (ret != ESP_OK) {
+        wifi_lock();
+        wifi_state = SOLAR_OS_WIFI_STATE_FAILED;
+        wifi_unlock();
+        return ret;
+    }
+
+    ret = wifi_upsert_profile(profile.ssid, profile.password);
+    if (ret != ESP_OK) {
+        return ret;
     }
 
     wifi_lock();
-    strlcpy(wifi_ssid, ssid, sizeof(wifi_ssid));
-    strlcpy(wifi_saved_ssid, ssid, sizeof(wifi_saved_ssid));
-    wifi_has_saved_config = true;
+    strlcpy(wifi_ssid, profile.ssid, sizeof(wifi_ssid));
+    wifi_refresh_saved_config_locked();
     wifi_has_ip = false;
     wifi_state = SOLAR_OS_WIFI_STATE_CONNECTING;
     wifi_unlock();
@@ -1076,22 +1422,150 @@ esp_err_t solar_os_wifi_forget(void)
         return ret;
     }
 
+    char selected_ssid[SOLAR_OS_WIFI_SSID_MAX + 1] = {0};
+    wifi_lock();
+    if (wifi_ssid[0] != '\0' && wifi_find_profile_index_locked(wifi_ssid) >= 0) {
+        strlcpy(selected_ssid, wifi_ssid, sizeof(selected_ssid));
+    } else if (wifi_profile_count > 0) {
+        strlcpy(selected_ssid, wifi_profiles[0].ssid, sizeof(selected_ssid));
+    }
+    wifi_unlock();
+
+    if (selected_ssid[0] == '\0') {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    return solar_os_wifi_forget_ssid(selected_ssid);
+}
+
+esp_err_t solar_os_wifi_forget_ssid(const char *ssid)
+{
+    if (ssid == NULL || ssid[0] == '\0' || strlen(ssid) > SOLAR_OS_WIFI_SSID_MAX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t ret = solar_os_wifi_init();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    bool removed_current = false;
+    wifi_profile_t next_profile = {0};
+    bool has_next_profile = false;
+
+    wifi_lock();
+    const int index = wifi_find_profile_index_locked(ssid);
+    if (index < 0) {
+        wifi_unlock();
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    removed_current = wifi_ssid[0] != '\0' && strcmp(wifi_ssid, ssid) == 0;
+    if ((size_t)index + 1 < wifi_profile_count) {
+        memmove(&wifi_profiles[index],
+                &wifi_profiles[index + 1],
+                (wifi_profile_count - (size_t)index - 1) * sizeof(wifi_profiles[0]));
+    }
+    wifi_profile_count--;
+    memset(&wifi_profiles[wifi_profile_count], 0, sizeof(wifi_profiles[wifi_profile_count]));
+    if (wifi_profile_count > 0) {
+        next_profile = wifi_profiles[0];
+        has_next_profile = true;
+    }
+    wifi_refresh_saved_config_locked();
+    wifi_unlock();
+
+    ret = wifi_save_profiles();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    if (removed_current) {
+        (void)esp_wifi_disconnect();
+    }
+
+    ret = wifi_program_station_config(has_next_profile ? &next_profile : NULL);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    if (removed_current || !has_next_profile) {
+        wifi_lock();
+        wifi_clear_link_state();
+        if (removed_current || !has_next_profile) {
+            wifi_ssid[0] = '\0';
+        }
+        wifi_disconnect_reason = 0;
+        wifi_state = wifi_sta_enabled ? SOLAR_OS_WIFI_STATE_IDLE : SOLAR_OS_WIFI_STATE_OFF;
+        wifi_unlock();
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t solar_os_wifi_forget_all(void)
+{
+    esp_err_t ret = solar_os_wifi_init();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
     (void)esp_wifi_disconnect();
-    wifi_config_t config = {0};
-    ret = esp_wifi_set_config(WIFI_IF_STA, &config);
+
+    wifi_lock();
+    wifi_clear_profiles_locked();
+    wifi_clear_link_state();
+    wifi_ssid[0] = '\0';
+    wifi_disconnect_reason = 0;
+    wifi_state = wifi_sta_enabled ? SOLAR_OS_WIFI_STATE_IDLE : SOLAR_OS_WIFI_STATE_OFF;
+    wifi_unlock();
+
+    ret = wifi_save_profiles();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    return wifi_program_station_config(NULL);
+}
+
+esp_err_t solar_os_wifi_known(solar_os_wifi_profile_t *profiles, size_t max_profiles, size_t *count)
+{
+    if (count != NULL) {
+        *count = 0;
+    }
+    if (max_profiles > 0 && profiles == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t ret = solar_os_wifi_init();
     if (ret != ESP_OK) {
         return ret;
     }
 
     wifi_lock();
-    wifi_clear_link_state();
-    wifi_ssid[0] = '\0';
-    wifi_saved_ssid[0] = '\0';
-    wifi_has_saved_config = false;
-    wifi_disconnect_reason = 0;
-    wifi_state = wifi_sta_enabled ? SOLAR_OS_WIFI_STATE_IDLE : SOLAR_OS_WIFI_STATE_OFF;
+    const size_t copy_count = wifi_profile_count < max_profiles ? wifi_profile_count : max_profiles;
+    for (size_t i = 0; i < copy_count; i++) {
+        strlcpy(profiles[i].ssid, wifi_profiles[i].ssid, sizeof(profiles[i].ssid));
+        profiles[i].preferred = i == 0;
+    }
+    if (count != NULL) {
+        *count = wifi_profile_count;
+    }
     wifi_unlock();
     return ESP_OK;
+}
+
+bool solar_os_wifi_is_known_ssid(const char *ssid)
+{
+    if (ssid == NULL || ssid[0] == '\0') {
+        return false;
+    }
+
+    bool known = false;
+    wifi_lock();
+    known = wifi_find_profile_index_locked(ssid) >= 0;
+    wifi_unlock();
+    return known;
 }
 
 esp_err_t solar_os_wifi_ap_start(const char *ssid, const char *password, const char *auth)
@@ -1342,6 +1816,7 @@ void solar_os_wifi_get_status(solar_os_wifi_status_t *status)
         .ap_channel = wifi_ap_channel,
         .ap_station_count = wifi_ap_station_count,
         .ap_max_connections = wifi_ap_max_connections,
+        .saved_profile_count = (uint8_t)wifi_profile_count,
         .nat_last_error = wifi_nat_last_error,
     };
     strlcpy(status->ssid, wifi_ssid, sizeof(status->ssid));

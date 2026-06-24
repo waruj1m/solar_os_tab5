@@ -602,6 +602,7 @@ static void solua_push_wifi_status(lua_State *L, const solar_os_wifi_status_t *s
     solua_set_int(L, -1, "ap_channel", status->ap_channel);
     solua_set_int(L, -1, "ap_station_count", status->ap_station_count);
     solua_set_int(L, -1, "ap_max_connections", status->ap_max_connections);
+    solua_set_int(L, -1, "saved_profile_count", status->saved_profile_count);
     solua_set_int(L, -1, "nat_last_error", status->nat_last_error);
     solua_set_str(L, -1, "nat_last_error_name", esp_err_to_name(status->nat_last_error));
 }
@@ -1146,6 +1147,17 @@ static int solua_wifi_forget(lua_State *L)
     return solua_check_esp(L, solar_os_wifi_forget());
 }
 
+static int solua_wifi_forget_ssid(lua_State *L)
+{
+    const char *ssid = luaL_checkstring(L, 1);
+    return solua_check_esp(L, solar_os_wifi_forget_ssid(ssid));
+}
+
+static int solua_wifi_forget_all(lua_State *L)
+{
+    return solua_check_esp(L, solar_os_wifi_forget_all());
+}
+
 static int solua_wifi_scan(lua_State *L)
 {
     solar_os_wifi_ap_t aps[SOLAR_OS_WIFI_SCAN_MAX_RESULTS];
@@ -1161,6 +1173,26 @@ static int solua_wifi_scan(lua_State *L)
         solua_set_int(L, -1, "rssi", aps[i].rssi);
         solua_set_int(L, -1, "channel", aps[i].channel);
         solua_set_bool(L, -1, "hidden", aps[i].hidden);
+        lua_rawseti(L, list, (lua_Integer)i + 1);
+    }
+    return 1;
+}
+
+static int solua_wifi_known(lua_State *L)
+{
+    solar_os_wifi_profile_t profiles[SOLAR_OS_WIFI_PROFILE_MAX];
+    size_t count = 0;
+    (void)solua_check_esp(L, solar_os_wifi_known(profiles,
+                                                 sizeof(profiles) / sizeof(profiles[0]),
+                                                 &count));
+
+    lua_newtable(L);
+    const int list = lua_gettop(L);
+    const size_t shown = count < SOLAR_OS_WIFI_PROFILE_MAX ? count : SOLAR_OS_WIFI_PROFILE_MAX;
+    for (size_t i = 0; i < shown; i++) {
+        lua_newtable(L);
+        solua_set_str(L, -1, "ssid", profiles[i].ssid);
+        solua_set_bool(L, -1, "preferred", profiles[i].preferred);
         lua_rawseti(L, list, (lua_Integer)i + 1);
     }
     return 1;
@@ -2425,6 +2457,9 @@ static void solua_open_solaros(lua_State *L)
     solua_set_func(L, mod, "connect_saved", solua_wifi_connect_saved);
     solua_set_func(L, mod, "disconnect", solua_wifi_disconnect);
     solua_set_func(L, mod, "forget", solua_wifi_forget);
+    solua_set_func(L, mod, "forget_ssid", solua_wifi_forget_ssid);
+    solua_set_func(L, mod, "forget_all", solua_wifi_forget_all);
+    solua_set_func(L, mod, "known", solua_wifi_known);
     solua_set_func(L, mod, "scan", solua_wifi_scan);
     solua_set_func(L, mod, "ap_start", solua_wifi_ap_start);
     solua_set_func(L, mod, "ap_stop", solua_wifi_ap_stop);

@@ -159,9 +159,12 @@ Wi-Fi functions expose station, SoftAP, scan, and NAT controls.
 - `start()`: start Wi-Fi and reconnect saved station config if present.
 - `stop()`: stop Wi-Fi.
 - `connect(ssid[, password])`: connect to a station network and save it.
-- `connect_saved()`: connect using saved station credentials.
+- `connect_saved()`: connect using remembered station profiles.
 - `disconnect()`: disconnect station mode.
-- `forget()`: remove saved station credentials.
+- `forget()`: remove the active or preferred station profile.
+- `forget_ssid(ssid)`: remove one remembered station profile.
+- `forget_all()`: remove all remembered station profiles.
+- `known()`: return remembered station profiles as dictionaries with `ssid` and `preferred`.
 - `scan()`: return visible APs as dictionaries with `ssid`, `auth`, `rssi`, `channel`, and `hidden`.
 - `ap_start([ssid[, password[, auth]]])`: start SoftAP, reusing saved AP config when no arguments are supplied.
 - `ap_stop()`: stop SoftAP.
