@@ -10,6 +10,7 @@
 #define SOLAR_OS_WIFI_PASSWORD_MAX 64
 #define SOLAR_OS_WIFI_SCAN_MAX_RESULTS 12
 #define SOLAR_OS_WIFI_AUTH_MAX 18
+#define SOLAR_OS_WIFI_PROFILE_MAX 5
 
 typedef enum {
     SOLAR_OS_WIFI_STATE_OFF,
@@ -57,8 +58,14 @@ typedef struct {
     uint8_t ap_channel;
     uint8_t ap_station_count;
     uint8_t ap_max_connections;
+    uint8_t saved_profile_count;
     esp_err_t nat_last_error;
 } solar_os_wifi_status_t;
+
+typedef struct {
+    char ssid[SOLAR_OS_WIFI_SSID_MAX + 1];
+    bool preferred;
+} solar_os_wifi_profile_t;
 
 esp_err_t solar_os_wifi_init(void);
 esp_err_t solar_os_wifi_start(void);
@@ -67,6 +74,10 @@ esp_err_t solar_os_wifi_connect(const char *ssid, const char *password);
 esp_err_t solar_os_wifi_connect_saved(void);
 esp_err_t solar_os_wifi_disconnect(void);
 esp_err_t solar_os_wifi_forget(void);
+esp_err_t solar_os_wifi_forget_ssid(const char *ssid);
+esp_err_t solar_os_wifi_forget_all(void);
+esp_err_t solar_os_wifi_known(solar_os_wifi_profile_t *profiles, size_t max_profiles, size_t *count);
+bool solar_os_wifi_is_known_ssid(const char *ssid);
 esp_err_t solar_os_wifi_ap_start(const char *ssid, const char *password, const char *auth);
 esp_err_t solar_os_wifi_ap_stop(void);
 esp_err_t solar_os_wifi_nat_set(bool enabled);

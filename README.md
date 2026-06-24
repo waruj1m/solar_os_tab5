@@ -200,7 +200,7 @@ Networking:
 
 - `ble [status|scan|pair|forget]`: `scan` lists nearby BLE devices; `pair` starts the BLE keyboard pairing scan. SolarOS remembers up to three keyboards and reconnects the most recent one first.
 - `wifi`: open the Wi-Fi status/control TUI.
-- `wifi [status|on|off|scan|connect|disconnect|forget|nat]`
+- `wifi [status|on|off|scan|connect|disconnect|known|forget|nat]`
 - `wifi ap [status|on|off]`: start a SoftAP, including APSTA when station mode is also active.
 - `wifi nat [status|on|off]`: enable or disable persistent IPv4 NAT for APSTA.
 - `mqtt [status|connect|disconnect|publish|subscribe]`: MQTT/MQTTS client with broker URL and credentials stored in NVS.
@@ -209,6 +209,8 @@ Networking:
 - `sshkey [status|gen|pub|rm]`
 
 `wifi ap on [ssid [password [open|wpa|wpa2|wpa/wpa2]]]` starts an access point. Supplying an SSID saves the AP settings in NVS; later `wifi ap on` reuses the saved SSID/password/auth mode, or falls back to the default open AP when no saved AP exists. With no password it creates an open AP. With a password and no explicit auth mode it uses WPA2. ESP-IDF does not support WEP in SoftAP mode, so SolarOS rejects `wep` for AP mode.
+
+`wifi connect "SSID" [password]` saves or updates one of up to five remembered station profiles. `wifi connect` and `wifi on` reconnect from the remembered list; when several remembered SSIDs are visible, SolarOS scans and selects the strongest one. `wifi known` lists remembered profiles, `wifi forget [ssid]` removes one profile, and `wifi forget all` clears the station profile list.
 
 `wifi nat on` saves NAT as enabled and activates it when both the station link and SoftAP are up. It stays in a waiting state until APSTA has an upstream IP address.
 

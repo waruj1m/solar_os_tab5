@@ -630,6 +630,7 @@ static mp_obj_t python_wifi_status_to_dict(const solar_os_wifi_status_t *status)
     python_dict_store_int(dict, "ap_channel", status->ap_channel);
     python_dict_store_int(dict, "ap_station_count", status->ap_station_count);
     python_dict_store_int(dict, "ap_max_connections", status->ap_max_connections);
+    python_dict_store_int(dict, "saved_profile_count", status->saved_profile_count);
     python_dict_store_int(dict, "nat_last_error", status->nat_last_error);
     python_dict_store_cstr(dict, "nat_last_error_name", esp_err_to_name(status->nat_last_error));
     return dict;
@@ -1182,6 +1183,20 @@ static mp_obj_t solaros_wifi_forget(void)
 }
 MP_DEFINE_CONST_FUN_OBJ_0(solaros_wifi_forget_obj, solaros_wifi_forget);
 
+static mp_obj_t solaros_wifi_forget_ssid(mp_obj_t ssid_obj)
+{
+    python_check_esp(solar_os_wifi_forget_ssid(mp_obj_str_get_str(ssid_obj)));
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_1(solaros_wifi_forget_ssid_obj, solaros_wifi_forget_ssid);
+
+static mp_obj_t solaros_wifi_forget_all(void)
+{
+    python_check_esp(solar_os_wifi_forget_all());
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_0(solaros_wifi_forget_all_obj, solaros_wifi_forget_all);
+
 static mp_obj_t solaros_wifi_scan(void)
 {
     solar_os_wifi_ap_t aps[SOLAR_OS_WIFI_SCAN_MAX_RESULTS];
@@ -1201,6 +1216,26 @@ static mp_obj_t solaros_wifi_scan(void)
     return list;
 }
 MP_DEFINE_CONST_FUN_OBJ_0(solaros_wifi_scan_obj, solaros_wifi_scan);
+
+static mp_obj_t solaros_wifi_known(void)
+{
+    solar_os_wifi_profile_t profiles[SOLAR_OS_WIFI_PROFILE_MAX];
+    size_t count = 0;
+    python_check_esp(solar_os_wifi_known(profiles,
+                                         sizeof(profiles) / sizeof(profiles[0]),
+                                         &count));
+
+    mp_obj_t list = mp_obj_new_list(0, NULL);
+    const size_t shown = count < SOLAR_OS_WIFI_PROFILE_MAX ? count : SOLAR_OS_WIFI_PROFILE_MAX;
+    for (size_t i = 0; i < shown; i++) {
+        mp_obj_t dict = mp_obj_new_dict(2);
+        python_dict_store_cstr(dict, "ssid", profiles[i].ssid);
+        python_dict_store_bool(dict, "preferred", profiles[i].preferred);
+        mp_obj_list_append(list, dict);
+    }
+    return list;
+}
+MP_DEFINE_CONST_FUN_OBJ_0(solaros_wifi_known_obj, solaros_wifi_known);
 
 static mp_obj_t solaros_wifi_ap_start(size_t n_args, const mp_obj_t *args)
 {
@@ -2644,6 +2679,9 @@ static void python_register_solaros_module(void)
     python_module_store(wifi, "connect_saved", MP_OBJ_FROM_PTR(&solaros_wifi_connect_saved_obj));
     python_module_store(wifi, "disconnect", MP_OBJ_FROM_PTR(&solaros_wifi_disconnect_obj));
     python_module_store(wifi, "forget", MP_OBJ_FROM_PTR(&solaros_wifi_forget_obj));
+    python_module_store(wifi, "forget_ssid", MP_OBJ_FROM_PTR(&solaros_wifi_forget_ssid_obj));
+    python_module_store(wifi, "forget_all", MP_OBJ_FROM_PTR(&solaros_wifi_forget_all_obj));
+    python_module_store(wifi, "known", MP_OBJ_FROM_PTR(&solaros_wifi_known_obj));
     python_module_store(wifi, "scan", MP_OBJ_FROM_PTR(&solaros_wifi_scan_obj));
     python_module_store(wifi, "ap_start", MP_OBJ_FROM_PTR(&solaros_wifi_ap_start_obj));
     python_module_store(wifi, "ap_stop", MP_OBJ_FROM_PTR(&solaros_wifi_ap_stop_obj));

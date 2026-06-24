@@ -2892,7 +2892,8 @@ static void wifi_print_usage(solar_os_shell_io_t *term)
     solar_os_shell_io_writeln(term, "  wifi scan");
     solar_os_shell_io_writeln(term, "  wifi connect [ssid [password]]");
     solar_os_shell_io_writeln(term, "  wifi disconnect");
-    solar_os_shell_io_writeln(term, "  wifi forget");
+    solar_os_shell_io_writeln(term, "  wifi known");
+    solar_os_shell_io_writeln(term, "  wifi forget [ssid|all]");
     solar_os_shell_io_writeln(term, "  wifi nat [status|on|off]");
     solar_os_shell_io_writeln(term, "  wifi ap [status]");
     solar_os_shell_io_writeln(term, "  wifi ap on [ssid [password [open|wpa|wpa2|wpa/wpa2]]]");
@@ -2947,7 +2948,10 @@ static void wifi_print_status(solar_os_shell_io_t *term)
                                  (int)status.rssi);
     }
     if (status.has_saved_config) {
-        solar_os_shell_io_printf(term, "Saved: %s\n", status.saved_ssid);
+        solar_os_shell_io_printf(term,
+                                 "Saved: %u, preferred %s\n",
+                                 (unsigned)status.saved_profile_count,
+                                 status.saved_ssid);
     } else {
         solar_os_shell_io_writeln(term, "Saved: none");
     }
@@ -2995,19 +2999,51 @@ static void wifi_cmd_scan(solar_os_shell_io_t *term)
         return;
     }
 
-    solar_os_shell_io_writeln(term, "RSSI CH AUTH       SSID");
+    solar_os_shell_io_writeln(term, "RSSI CH AUTH       K SSID");
     for (size_t i = 0; i < found; i++) {
+        const bool known = !aps[i].hidden && solar_os_wifi_is_known_ssid(aps[i].ssid);
         solar_os_shell_io_printf(term,
-                                 "%4d %2u %-10s %s\n",
+                                 "%4d %2u %-10s %c %s\n",
                                  (int)aps[i].rssi,
                                  (unsigned)aps[i].channel,
                                  aps[i].auth,
+                                 known ? '*' : '-',
                                  aps[i].ssid);
     }
     solar_os_shell_io_printf(term,
                              "%u network%s shown\n",
                              (unsigned)found,
                              found == 1 ? "" : "s");
+}
+
+static void wifi_cmd_known(solar_os_shell_io_t *term)
+{
+    solar_os_wifi_profile_t profiles[SOLAR_OS_WIFI_PROFILE_MAX];
+    size_t count = 0;
+    const esp_err_t err = solar_os_wifi_known(profiles,
+                                              sizeof(profiles) / sizeof(profiles[0]),
+                                              &count);
+    if (err != ESP_OK) {
+        solar_os_shell_io_printf(term, "wifi known failed: %s\n", esp_err_to_name(err));
+        return;
+    }
+
+    if (count == 0) {
+        solar_os_shell_io_writeln(term, "no known networks");
+        return;
+    }
+
+    solar_os_shell_io_writeln(term, "P SSID");
+    const size_t shown = count < SOLAR_OS_WIFI_PROFILE_MAX ? count : SOLAR_OS_WIFI_PROFILE_MAX;
+    for (size_t i = 0; i < shown; i++) {
+        solar_os_shell_io_printf(term,
+                                 "%c %s\n",
+                                 profiles[i].preferred ? '*' : '-',
+                                 profiles[i].ssid);
+    }
+    if (count > shown) {
+        solar_os_shell_io_printf(term, "%u more not shown\n", (unsigned)(count - shown));
+    }
 }
 
 static void wifi_cmd_ap(solar_os_shell_io_t *term, int argc, char **argv)
@@ -3113,7 +3149,11 @@ static void wifi_cmd_connect(solar_os_shell_io_t *term, int argc, char **argv)
         if (err == ESP_ERR_NOT_FOUND) {
             solar_os_shell_io_writeln(term, "wifi: no saved network");
         } else if (err == ESP_OK) {
-            solar_os_shell_io_writeln(term, "WiFi connecting to saved network");
+            solar_os_wifi_status_t status;
+            solar_os_wifi_get_status(&status);
+            solar_os_shell_io_printf(term,
+                                     "WiFi connecting to %s\n",
+                                     status.ssid[0] != '\0' ? status.ssid : status.saved_ssid);
         } else {
             solar_os_shell_io_printf(term, "wifi connect failed: %s\n", esp_err_to_name(err));
         }
@@ -3159,7 +3199,10 @@ static void wifi_cmd_on(solar_os_shell_io_t *term)
 
     err = solar_os_wifi_connect_saved();
     if (err == ESP_OK) {
-        solar_os_shell_io_printf(term, "WiFi radio on, connecting to %s\n", status.saved_ssid);
+        solar_os_wifi_get_status(&status);
+        solar_os_shell_io_printf(term,
+                                 "WiFi radio on, connecting to %s\n",
+                                 status.ssid[0] != '\0' ? status.ssid : status.saved_ssid);
     } else if (err == ESP_ERR_NOT_FOUND) {
         solar_os_shell_io_writeln(term, "WiFi radio on");
     } else {
@@ -3315,7 +3358,15 @@ static void wifi_tui_current_value(wifi_tui_item_t item,
         }
         break;
     case WIFI_TUI_SAVED_STA:
-        strlcpy(buffer, status->has_saved_config ? status->saved_ssid : "none", buffer_len);
+        if (status->has_saved_config) {
+            snprintf(buffer,
+                     buffer_len,
+                     "%u %s",
+                     (unsigned)status->saved_profile_count,
+                     status->saved_ssid);
+        } else {
+            strlcpy(buffer, "none", buffer_len);
+        }
         break;
     case WIFI_TUI_SAVED_AP:
         if (status->has_saved_ap_config) {
@@ -3343,17 +3394,20 @@ static void wifi_tui_render_scan(size_t start_row, size_t rows, size_t cols)
     wifi_tui_write_cell(start_row,
                         0,
                         cols,
-                        wifi_tui.scan_count == 0 ? "scan: no networks" : "scan: rssi ch auth ssid",
+                        wifi_tui.scan_count == 0 ? "scan: no networks" : "scan: rssi ch auth k ssid",
                         SOLAR_OS_TUI_ATTR_BOLD);
 
     for (size_t i = 0; i < wifi_tui.scan_count && start_row + i + 1 < rows; i++) {
         char line[WIFI_TUI_STATUS_MAX];
+        const bool known = !wifi_tui.scan_aps[i].hidden &&
+            solar_os_wifi_is_known_ssid(wifi_tui.scan_aps[i].ssid);
         snprintf(line,
                  sizeof(line),
-                 "%4d %2u %-10s %s",
+                 "%4d %2u %-10s %c %s",
                  (int)wifi_tui.scan_aps[i].rssi,
                  (unsigned)wifi_tui.scan_aps[i].channel,
                  wifi_tui.scan_aps[i].auth,
+                 known ? '*' : '-',
                  wifi_tui.scan_aps[i].ssid);
         wifi_tui_write_cell(start_row + i + 1, 0, cols, line, SOLAR_OS_TUI_ATTR_NORMAL);
     }
@@ -3448,8 +3502,12 @@ static void wifi_tui_start_radio(void)
 
     err = solar_os_wifi_connect_saved();
     if (err == ESP_OK) {
+        solar_os_wifi_get_status(&status);
         char message[WIFI_TUI_STATUS_MAX];
-        snprintf(message, sizeof(message), "connecting %s", status.saved_ssid);
+        snprintf(message,
+                 sizeof(message),
+                 "connecting %s",
+                 status.ssid[0] != '\0' ? status.ssid : status.saved_ssid);
         wifi_tui_set_status(message);
     } else if (err == ESP_ERR_NOT_FOUND) {
         wifi_tui_set_status("radio on");
@@ -3650,7 +3708,7 @@ void solar_os_shell_cmd_wifi(solar_os_context_t *ctx, int argc, char **argv)
     if (argc == 1) {
         if (solar_os_shell_io_kind(term) == SOLAR_OS_SHELL_IO_KIND_PORT) {
             solar_os_shell_io_writeln(term, "wifi: TUI is only available on the display shell");
-            solar_os_shell_io_writeln(term, "usage: wifi status|on|off|scan|connect|disconnect|forget|ap|nat");
+            solar_os_shell_io_writeln(term, "usage: wifi status|on|off|scan|connect|disconnect|known|forget|ap|nat");
             return;
         }
         const esp_err_t err = solar_os_context_request_launch(ctx, &wifi_tui_app, 0, NULL);
@@ -3714,10 +3772,37 @@ void solar_os_shell_cmd_wifi(solar_os_context_t *ctx, int argc, char **argv)
         return;
     }
 
+    if (strcmp(argv[1], "known") == 0) {
+        if (argc != 2) {
+            solar_os_shell_io_writeln(term, "usage: wifi known");
+            return;
+        }
+        wifi_cmd_known(term);
+        return;
+    }
+
     if (strcmp(argv[1], "forget") == 0) {
-        const esp_err_t err = solar_os_wifi_forget();
+        esp_err_t err;
+        bool forgetting_all = false;
+        if (argc == 2) {
+            err = solar_os_wifi_forget();
+        } else if (argc == 3 && strcmp(argv[2], "all") == 0) {
+            forgetting_all = true;
+            err = solar_os_wifi_forget_all();
+        } else if (argc == 3) {
+            err = solar_os_wifi_forget_ssid(argv[2]);
+        } else {
+            solar_os_shell_io_writeln(term, "usage: wifi forget [ssid|all]");
+            return;
+        }
+
         if (err == ESP_OK) {
-            solar_os_shell_io_writeln(term, "WiFi network forgotten");
+            solar_os_shell_io_writeln(term,
+                                      forgetting_all ? "WiFi profiles forgotten" : "WiFi profile forgotten");
+        } else if (err == ESP_ERR_NOT_FOUND) {
+            solar_os_shell_io_writeln(term, "wifi: profile not found");
+        } else if (err == ESP_ERR_INVALID_ARG) {
+            solar_os_shell_io_writeln(term, "wifi: invalid SSID");
         } else {
             solar_os_shell_io_printf(term, "wifi forget failed: %s\n", esp_err_to_name(err));
         }
