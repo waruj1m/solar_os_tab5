@@ -102,6 +102,7 @@ set(SOLAR_OS_SRCS
     "services/solar_os_tui.c"
     "services/solar_os_uart.c"
     "services/solar_os_wifi.c"
+    "services/solar_os_zmodem.c"
 )
 
 set(SOLAR_OS_REQUIRES

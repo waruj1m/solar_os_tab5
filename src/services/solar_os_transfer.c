@@ -3,11 +3,13 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "solar_os_port.h"
+#include "solar_os_zmodem.h"
 
 #define TRANSFER_CHUNK_SIZE 512U
 #define TRANSFER_IDLE_READ_TIMEOUT_MS 100U
@@ -105,19 +107,15 @@ static esp_err_t transfer_claim_port(const solar_os_transfer_options_t *options,
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (options->protocol != SOLAR_OS_TRANSFER_PROTOCOL_RAW) {
-        return ESP_ERR_NOT_SUPPORTED;
-    }
-
     solar_os_port_info_t info;
     esp_err_t err = solar_os_port_get_info(options->port_name, &info);
     if (err != ESP_OK) {
         return err;
     }
 
-    const uint32_t required = direction == TRANSFER_DIRECTION_SEND ?
-        SOLAR_OS_PORT_CAP_WRITE :
-        SOLAR_OS_PORT_CAP_READ;
+    const uint32_t required = options->protocol == SOLAR_OS_TRANSFER_PROTOCOL_RAW ?
+        (direction == TRANSFER_DIRECTION_SEND ? SOLAR_OS_PORT_CAP_WRITE : SOLAR_OS_PORT_CAP_READ) :
+        (SOLAR_OS_PORT_CAP_READ | SOLAR_OS_PORT_CAP_WRITE);
     if ((info.capabilities & required) == 0) {
         return ESP_ERR_NOT_SUPPORTED;
     }
@@ -201,7 +199,7 @@ esp_err_t solar_os_transfer_send(const solar_os_transfer_options_t *options,
     if (options == NULL || options->port_name == NULL || options->path == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (options->protocol != SOLAR_OS_TRANSFER_PROTOCOL_RAW) {
+    if (options->protocol == SOLAR_OS_TRANSFER_PROTOCOL_KERMIT) {
         return ESP_ERR_NOT_SUPPORTED;
     }
 
@@ -214,6 +212,25 @@ esp_err_t solar_os_transfer_send(const solar_os_transfer_options_t *options,
     esp_err_t err = transfer_claim_port(options, TRANSFER_DIRECTION_SEND, &port);
     if (err != ESP_OK) {
         fclose(file);
+        return err;
+    }
+
+    if (options->protocol == SOLAR_OS_TRANSFER_PROTOCOL_ZMODEM) {
+        struct stat st;
+        if (stat(options->path, &st) != 0) {
+            (void)solar_os_port_release(&port);
+            fclose(file);
+            return ESP_FAIL;
+        }
+
+        err = solar_os_zmodem_send(options, &port, file, (uint64_t)st.st_size, result);
+        const esp_err_t release_err = solar_os_port_release(&port);
+        if (fclose(file) != 0 && err == ESP_OK) {
+            err = ESP_FAIL;
+        }
+        if (err == ESP_OK) {
+            err = release_err;
+        }
         return err;
     }
 
@@ -272,9 +289,25 @@ esp_err_t solar_os_transfer_recv(const solar_os_transfer_options_t *options,
         memset(result, 0, sizeof(*result));
     }
 
+    if (options == NULL || options->port_name == NULL || options->path == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (options->protocol == SOLAR_OS_TRANSFER_PROTOCOL_KERMIT) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
     solar_os_port_handle_t port = SOLAR_OS_PORT_HANDLE_INIT;
     esp_err_t err = transfer_claim_port(options, TRANSFER_DIRECTION_RECV, &port);
     if (err != ESP_OK) {
+        return err;
+    }
+
+    if (options->protocol == SOLAR_OS_TRANSFER_PROTOCOL_ZMODEM) {
+        err = solar_os_zmodem_recv(options, &port, result);
+        const esp_err_t release_err = solar_os_port_release(&port);
+        if (err == ESP_OK) {
+            err = release_err;
+        }
         return err;
     }
 

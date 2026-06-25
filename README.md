@@ -242,13 +242,15 @@ daq start /logs/key.csv gpio17 --changes
 daq start /logs/serial.bin uart0 --raw --rate-ms 25
 xfer send uart0 /logs/payload.bin --raw
 xfer recv uart0 /logs/capture.bin --raw --idle-ms 5000
+xfer send uart0 /logs/payload.bin --zmodem
+xfer recv uart0 /logs/from-host.bin --zmodem
 daq status
 daq stop
 ```
 
 `daq` without arguments prints usage. `daq streams` lists available stream IDs. `daq start` accepts either file-first or stream-first argument order; file-first is easier to complete for multi-stream captures. It appends by default and writes a CSV header when creating a new CSV file. Use `--replace` to overwrite. Units are encoded in CSV column names, not repeated on every row. Each acquired row or raw byte chunk is flushed and synced to the filesystem before the job continues. `--changes` stores only changed values for single-stream CSV capture. `--raw` is byte-stream only, single-stream only, and writes received bytes directly to the file without timestamps, CSV framing, or a header.
 
-`xfer` is for explicit file transfer over byte-stream ports. Raw send/receive is supported now; ZMODEM and Kermit are reserved protocol slots. `xfer send <port> <file> --raw` writes file bytes to a port. `xfer recv <port> <file> --raw` captures bytes from a port until stopped, or until `--idle-ms` expires. Use `-d <ms>`/`--delay-ms <ms>` with `send` to pace bytes for slower targets.
+`xfer` is for explicit file transfer over byte-stream ports. Raw send/receive and single-file ZMODEM are supported now; Kermit is a reserved protocol slot. `xfer send <port> <file> --raw` writes file bytes to a port. `xfer recv <port> <file> --raw` captures bytes from a port until stopped, or until `--idle-ms` expires. Use `-d <ms>`/`--delay-ms <ms>` with `send` to pace bytes for slower targets. `xfer send <port> <file> --zmodem` talks to a peer running `rz`; `xfer recv <port> <file> --zmodem` talks to a peer running `sz` and stores the received data at the explicit local path.
 
 ## OTA Release Layout
 

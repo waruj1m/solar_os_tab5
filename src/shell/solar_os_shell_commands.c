@@ -6036,15 +6036,17 @@ static void xfer_print_usage(solar_os_shell_io_t *term)
 {
     solar_os_shell_io_writeln(term, "usage:");
     solar_os_shell_io_writeln(term, "  xfer protocols");
-    solar_os_shell_io_writeln(term, "  xfer send <port> <file> [--raw|--protocol raw] [-d ms]");
-    solar_os_shell_io_writeln(term, "  xfer recv <port> <file> [--raw|--protocol raw] [--append|--replace] [--idle-ms ms]");
-    solar_os_shell_io_writeln(term, "protocols: raw now; zmodem and kermit are reserved");
+    solar_os_shell_io_writeln(term, "  xfer send <port> <file> --raw [-d ms]");
+    solar_os_shell_io_writeln(term, "  xfer recv <port> <file> --raw [--append|--replace] [--idle-ms ms]");
+    solar_os_shell_io_writeln(term, "  xfer send <port> <file> --zmodem");
+    solar_os_shell_io_writeln(term, "  xfer recv <port> <file> --zmodem [--append|--replace]");
+    solar_os_shell_io_writeln(term, "protocols: raw and zmodem are supported; kermit is reserved");
 }
 
 static void xfer_print_protocols(solar_os_shell_io_t *term)
 {
     solar_os_shell_io_writeln(term, "raw     supported");
-    solar_os_shell_io_writeln(term, "zmodem  not implemented");
+    solar_os_shell_io_writeln(term, "zmodem  supported");
     solar_os_shell_io_writeln(term, "kermit  not implemented");
 }
 
@@ -6236,13 +6238,6 @@ void solar_os_shell_cmd_xfer(solar_os_context_t *ctx, int argc, char **argv)
 
     if (strcmp(config.direction, "protocols") == 0) {
         xfer_print_protocols(term);
-        return;
-    }
-
-    if (config.protocol != SOLAR_OS_TRANSFER_PROTOCOL_RAW) {
-        solar_os_shell_io_printf(term,
-                                 "xfer: %s is not implemented yet\n",
-                                 solar_os_transfer_protocol_name(config.protocol));
         return;
     }
 
