@@ -13,6 +13,7 @@
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "solar_os_doc.h"
+#include "solar_os_epub.h"
 #include "solar_os_gfx.h"
 #include "solar_os_keys.h"
 #include "solar_os_storage.h"
@@ -31,18 +32,30 @@
 typedef struct {
     solar_os_doc_t doc;
     solar_os_doc_layout_t layout;
+    solar_os_epub_book_t *epub_book;
     bool loaded;
     bool error_only;
+    bool epub;
     bool layout_valid;
     int scroll_y;
     int zoom;
     int content_height;
     int layout_width;
     int layout_zoom;
+    size_t epub_chapter;
+    size_t epub_chapter_count;
     char path[SOLAR_OS_STORAGE_PATH_MAX];
     char display_name[SOLAR_OS_STORAGE_PATH_MAX];
     char message[READER_MESSAGE_MAX];
 } reader_state_t;
+
+typedef struct {
+    bool found;
+    uint64_t offset;
+    uint64_t len;
+    int zoom;
+    size_t chapter;
+} reader_saved_position_t;
 
 static reader_state_t reader;
 
@@ -87,6 +100,46 @@ static bool reader_file_exists(const char *path)
 static bool reader_target_is_url(const char *target)
 {
     return target != NULL && strstr(target, "://") != NULL;
+}
+
+static bool reader_path_has_suffix(const char *path, const char *suffix)
+{
+    if (path == NULL || suffix == NULL) {
+        return false;
+    }
+
+    const size_t path_len = strlen(path);
+    const size_t suffix_len = strlen(suffix);
+    if (suffix_len > path_len) {
+        return false;
+    }
+
+    const char *tail = &path[path_len - suffix_len];
+    for (size_t i = 0; i < suffix_len; i++) {
+        if (tolower((unsigned char)tail[i]) != tolower((unsigned char)suffix[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool reader_document_is_epub(const char *document_path)
+{
+    if (document_path == NULL) {
+        return false;
+    }
+    const char *pipe = strchr(document_path, '|');
+    if (pipe != NULL) {
+        char archive[SOLAR_OS_STORAGE_PATH_MAX];
+        const size_t len = (size_t)(pipe - document_path);
+        if (len == 0 || len >= sizeof(archive)) {
+            return false;
+        }
+        memcpy(archive, document_path, len);
+        archive[len] = '\0';
+        return reader_path_has_suffix(archive, ".epub");
+    }
+    return reader_path_has_suffix(document_path, ".epub");
 }
 
 static void *reader_malloc(size_t size)
@@ -165,6 +218,10 @@ static esp_err_t reader_doc_asset_read(void *user,
     *out_data = NULL;
     *out_len = 0;
 
+    if (reader_document_is_epub(document_path)) {
+        return solar_os_epub_asset_read(user, document_path, target, out_data, out_len);
+    }
+
     char path[SOLAR_OS_STORAGE_PATH_MAX];
     esp_err_t ret = reader_resolve_asset_path(document_path, target, path, sizeof(path));
     if (ret != ESP_OK) {
@@ -209,31 +266,34 @@ static void reader_doc_asset_release(void *user, uint8_t *data)
     heap_caps_free(data);
 }
 
-static bool reader_path_has_suffix(const char *path, const char *suffix)
-{
-    if (path == NULL || suffix == NULL) {
-        return false;
-    }
-
-    const size_t path_len = strlen(path);
-    const size_t suffix_len = strlen(suffix);
-    if (suffix_len > path_len) {
-        return false;
-    }
-
-    const char *tail = &path[path_len - suffix_len];
-    for (size_t i = 0; i < suffix_len; i++) {
-        if (tolower((unsigned char)tail[i]) != tolower((unsigned char)suffix[i])) {
-            return false;
-        }
-    }
-    return true;
-}
-
 static bool reader_path_is_markdown(const char *path)
 {
     return reader_path_has_suffix(path, ".md") ||
         reader_path_has_suffix(path, ".markdown");
+}
+
+static bool reader_path_is_epub(const char *path)
+{
+    return reader_path_has_suffix(path, ".epub");
+}
+
+static esp_err_t reader_load_epub_chapter(size_t chapter)
+{
+    if (reader.epub_book == NULL || chapter >= reader.epub_chapter_count) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t ret = solar_os_epub_load_spine_doc(reader.epub_book, chapter, &reader.doc);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    reader.epub_chapter = chapter;
+    reader.scroll_y = 0;
+    reader.layout_valid = false;
+    reader.content_height = 0;
+    reader.message[0] = '\0';
+    return ESP_OK;
 }
 
 static void reader_draw_text_clipped(solar_os_gfx_t *gfx,
@@ -333,21 +393,47 @@ static bool reader_parse_position_line(char *line,
                                         uint64_t *offset,
                                         uint64_t *len,
                                         int *zoom,
+                                        size_t *chapter,
                                         char **path)
 {
     int path_index = 0;
+    int chapter_index = 0;
+    unsigned parsed_chapter = 0;
 
-    if (line == NULL || offset == NULL || len == NULL || zoom == NULL || path == NULL) {
+    if (line == NULL ||
+        offset == NULL ||
+        len == NULL ||
+        zoom == NULL ||
+        chapter == NULL ||
+        path == NULL) {
         return false;
     }
+    *chapter = 0;
     if (sscanf(line,
-               "%" SCNu64 " %" SCNu64 " z=%d %n",
+               "%" SCNu64 " %" SCNu64 " z=%d c=%u %n",
                offset,
                len,
                zoom,
-               &path_index) != 3 ||
-        path_index <= 0 ||
-        line[path_index] == '\0') {
+               &parsed_chapter,
+               &path_index) == 4 &&
+        path_index > 0 &&
+        line[path_index] != '\0') {
+        *chapter = parsed_chapter;
+    } else if (sscanf(line,
+                      "%" SCNu64 " %" SCNu64 " z=%d %n",
+                      offset,
+                      len,
+                      zoom,
+                      &chapter_index) == 3 &&
+               chapter_index > 0 &&
+               line[chapter_index] != '\0') {
+        path_index = chapter_index;
+        *chapter = 0;
+    } else {
+        return false;
+    }
+
+    if (path_index <= 0 || line[path_index] == '\0') {
         return false;
     }
 
@@ -359,12 +445,53 @@ static bool reader_parse_position_line(char *line,
     return (*path)[0] != '\0';
 }
 
+static bool reader_read_saved_position(reader_saved_position_t *saved)
+{
+    char positions_path[SOLAR_OS_STORAGE_PATH_MAX];
+    char line[READER_POSITION_LINE_MAX];
+
+    if (saved == NULL) {
+        return false;
+    }
+    memset(saved, 0, sizeof(*saved));
+
+    if (reader_state_path(positions_path, sizeof(positions_path), READER_POSITIONS_FILE) != ESP_OK) {
+        return false;
+    }
+
+    FILE *file = fopen(positions_path, "r");
+    if (file == NULL) {
+        return false;
+    }
+
+    while (fgets(line, sizeof(line), file) != NULL) {
+        char *saved_path = NULL;
+        size_t chapter = 0;
+        if (!reader_parse_position_line(line,
+                                        &saved->offset,
+                                        &saved->len,
+                                        &saved->zoom,
+                                        &chapter,
+                                        &saved_path) ||
+            strcmp(saved_path, reader.path) != 0) {
+            continue;
+        }
+        saved->chapter = chapter;
+        saved->found = true;
+        break;
+    }
+
+    fclose(file);
+    return saved->found;
+}
+
 static bool reader_same_position_path(const char *line)
 {
     char copy[READER_POSITION_LINE_MAX];
     uint64_t offset = 0;
     uint64_t len = 0;
     int zoom = 0;
+    size_t chapter = 0;
     char *path = NULL;
 
     if (line == NULL) {
@@ -372,7 +499,7 @@ static bool reader_same_position_path(const char *line)
     }
 
     strlcpy(copy, line, sizeof(copy));
-    return reader_parse_position_line(copy, &offset, &len, &zoom, &path) &&
+    return reader_parse_position_line(copy, &offset, &len, &zoom, &chapter, &path) &&
         strcmp(path, reader.path) == 0;
 }
 
@@ -417,42 +544,38 @@ static void reader_scroll_to_anchor(solar_os_context_t *ctx, uint64_t saved_offs
     }
 }
 
+static bool reader_switch_epub_chapter(solar_os_context_t *ctx, size_t chapter, bool end)
+{
+    if (!reader.epub || chapter >= reader.epub_chapter_count) {
+        return false;
+    }
+
+    const esp_err_t err = reader_load_epub_chapter(chapter);
+    if (err != ESP_OK) {
+        snprintf(reader.message, sizeof(reader.message), "chapter load failed: %s", esp_err_to_name(err));
+        return true;
+    }
+
+    reader_update_measure(solar_os_context_gfx(ctx));
+    reader.scroll_y = end ? reader_max_scroll(solar_os_context_gfx(ctx)) : 0;
+    reader_clamp_scroll(solar_os_context_gfx(ctx));
+    return true;
+}
+
 static void reader_load_position(solar_os_context_t *ctx)
 {
-    char positions_path[SOLAR_OS_STORAGE_PATH_MAX];
-    char line[READER_POSITION_LINE_MAX];
-
-    if (reader_state_path(positions_path, sizeof(positions_path), READER_POSITIONS_FILE) != ESP_OK) {
+    reader_saved_position_t saved;
+    if (!reader_read_saved_position(&saved)) {
         return;
     }
-
-    FILE *file = fopen(positions_path, "r");
-    if (file == NULL) {
-        return;
+    if (saved.zoom >= 0 && saved.zoom <= READER_MAX_ZOOM) {
+        reader.zoom = saved.zoom;
     }
-
-    while (fgets(line, sizeof(line), file) != NULL) {
-        uint64_t saved_offset = 0;
-        uint64_t saved_len = 0;
-        int saved_zoom = 0;
-        char *saved_path = NULL;
-        if (!reader_parse_position_line(line, &saved_offset, &saved_len, &saved_zoom, &saved_path) ||
-            strcmp(saved_path, reader.path) != 0) {
-            continue;
-        }
-
-        if (saved_zoom >= 0 && saved_zoom <= READER_MAX_ZOOM) {
-            reader.zoom = saved_zoom;
-        }
-        reader.layout_valid = false;
-        reader_scroll_to_anchor(ctx, saved_offset);
-        snprintf(reader.message,
-                 sizeof(reader.message),
-                 saved_len == reader.doc.source_len ? "resumed" : "resumed, file changed");
-        break;
-    }
-
-    fclose(file);
+    reader.layout_valid = false;
+    reader_scroll_to_anchor(ctx, saved.offset);
+    snprintf(reader.message,
+             sizeof(reader.message),
+             saved.len == reader.doc.source_len ? "resumed" : "resumed, chapter changed");
 }
 
 static void reader_save_position(solar_os_context_t *ctx)
@@ -493,10 +616,11 @@ static void reader_save_position(solar_os_context_t *ctx)
     }
 
     fprintf(dest,
-            "%" PRIu64 " %" PRIu64 " z=%d %s\n",
+            "%" PRIu64 " %" PRIu64 " z=%d c=%u %s\n",
             (uint64_t)offset,
             (uint64_t)reader.doc.source_len,
             reader.zoom,
+            (unsigned)(reader.epub ? reader.epub_chapter : 0U),
             reader.path);
 
     const bool ok = ferror(dest) == 0;
@@ -524,6 +648,14 @@ static void reader_draw_header(solar_os_gfx_t *gfx)
 
     if (reader.message[0] != '\0') {
         snprintf(title, sizeof(title), "reader z%d %s", reader.zoom, reader.message);
+    } else if (reader.epub && reader.epub_chapter_count > 0) {
+        snprintf(title,
+                 sizeof(title),
+                 "reader z%d %u/%u %s",
+                 reader.zoom,
+                 (unsigned)(reader.epub_chapter + 1U),
+                 (unsigned)reader.epub_chapter_count,
+                 reader.display_name);
     } else {
         snprintf(title, sizeof(title), "reader z%d %s", reader.zoom, reader.display_name);
     }
@@ -606,8 +738,16 @@ static void reader_scroll_lines(solar_os_context_t *ctx, int delta_lines)
 
     int target = (int)line_index + delta_lines;
     if (target < 0) {
+        if (reader.epub && reader.epub_chapter > 0) {
+            (void)reader_switch_epub_chapter(ctx, reader.epub_chapter - 1U, true);
+            return;
+        }
         target = 0;
     } else if (target >= (int)reader.layout.line_count) {
+        if (reader.epub && reader.epub_chapter + 1U < reader.epub_chapter_count) {
+            (void)reader_switch_epub_chapter(ctx, reader.epub_chapter + 1U, false);
+            return;
+        }
         target = (int)reader.layout.line_count - 1;
     }
     reader_scroll_to_line(ctx, (size_t)target);
@@ -695,6 +835,9 @@ static esp_err_t reader_load_doc_file(const char *path)
     if (!reader_file_exists(path)) {
         return ESP_ERR_NOT_FOUND;
     }
+    if (reader_path_is_epub(path)) {
+        return reader_load_epub_chapter(reader.epub_chapter);
+    }
     return solar_os_doc_load_path_as(&reader.doc, path, reader_path_is_markdown(path));
 }
 
@@ -718,7 +861,7 @@ static esp_err_t reader_start(solar_os_context_t *ctx)
     const int argc = solar_os_context_argc(ctx);
     if (argc != 2) {
         reader.error_only = true;
-        snprintf(reader.message, sizeof(reader.message), "usage: reader <file.md|file.txt>");
+        snprintf(reader.message, sizeof(reader.message), "usage: reader <file.txt|file.md|file.epub>");
         solar_os_context_set_graphics_active(ctx, true);
         reader_render(ctx);
         return ESP_OK;
@@ -740,6 +883,39 @@ static esp_err_t reader_start(solar_os_context_t *ctx)
         strlcpy(reader.display_name, reader.path, sizeof(reader.display_name));
     }
 
+    reader_saved_position_t saved;
+    const bool has_saved = reader_read_saved_position(&saved);
+    if (has_saved && saved.zoom >= 0 && saved.zoom <= READER_MAX_ZOOM) {
+        reader.zoom = saved.zoom;
+    }
+
+    reader.epub = reader_path_is_epub(reader.path);
+    if (reader.epub) {
+        err = solar_os_epub_open(reader.path, &reader.epub_book);
+        if (err != ESP_OK) {
+            reader.error_only = true;
+            snprintf(reader.message, sizeof(reader.message), "epub open failed: %s", esp_err_to_name(err));
+            solar_os_context_set_graphics_active(ctx, true);
+            reader_render(ctx);
+            return ESP_OK;
+        }
+        reader.epub_chapter_count = solar_os_epub_spine_count(reader.epub_book);
+        if (reader.epub_chapter_count == 0) {
+            reader.error_only = true;
+            snprintf(reader.message, sizeof(reader.message), "epub has no readable spine");
+            solar_os_context_set_graphics_active(ctx, true);
+            reader_render(ctx);
+            return ESP_OK;
+        }
+        if (has_saved && saved.chapter < reader.epub_chapter_count) {
+            reader.epub_chapter = saved.chapter;
+        }
+        const char *title = solar_os_epub_title(reader.epub_book);
+        if (title != NULL && title[0] != '\0') {
+            strlcpy(reader.display_name, title, sizeof(reader.display_name));
+        }
+    }
+
     err = reader_load_doc_file(reader.path);
     if (err != ESP_OK) {
         reader.error_only = true;
@@ -751,7 +927,21 @@ static esp_err_t reader_start(solar_os_context_t *ctx)
 
     reader.loaded = true;
     solar_os_context_set_graphics_active(ctx, true);
-    reader_load_position(ctx);
+    if (has_saved) {
+        reader.layout_valid = false;
+        reader_scroll_to_anchor(ctx, saved.offset);
+        if (reader.epub) {
+            snprintf(reader.message,
+                     sizeof(reader.message),
+                     "resumed chapter %u/%u",
+                     (unsigned)(reader.epub_chapter + 1U),
+                     (unsigned)reader.epub_chapter_count);
+        } else {
+            snprintf(reader.message, sizeof(reader.message), "resumed");
+        }
+    } else if (!reader.epub) {
+        reader_load_position(ctx);
+    }
     reader_render(ctx);
     return ESP_OK;
 }
@@ -761,6 +951,7 @@ static void reader_stop(solar_os_context_t *ctx)
     reader_save_position(ctx);
     solar_os_doc_free(&reader.doc);
     solar_os_doc_layout_free(&reader.layout);
+    solar_os_epub_close(reader.epub_book);
     memset(&reader, 0, sizeof(reader));
     solar_os_context_set_graphics_active(ctx, false);
 }
@@ -770,6 +961,20 @@ static void reader_page(solar_os_context_t *ctx, bool down)
     solar_os_gfx_t *gfx = solar_os_context_gfx(ctx);
     reader_update_measure(gfx);
     if (!reader.layout_valid || reader.layout.line_count == 0) {
+        return;
+    }
+
+    const int max_scroll = reader_max_scroll(gfx);
+    if (reader.epub && down && reader.scroll_y >= max_scroll) {
+        if (reader.epub_chapter + 1U < reader.epub_chapter_count) {
+            (void)reader_switch_epub_chapter(ctx, reader.epub_chapter + 1U, false);
+        }
+        return;
+    }
+    if (reader.epub && !down && reader.scroll_y <= 0) {
+        if (reader.epub_chapter > 0) {
+            (void)reader_switch_epub_chapter(ctx, reader.epub_chapter - 1U, true);
+        }
         return;
     }
 

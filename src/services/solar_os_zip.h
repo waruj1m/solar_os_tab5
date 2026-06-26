@@ -49,6 +49,12 @@ esp_err_t solar_os_zip_list(const char *archive_path,
 esp_err_t solar_os_zip_extract(const char *archive_path,
                                const char *dest_dir,
                                const solar_os_unzip_options_t *options);
+esp_err_t solar_os_zip_read_file(const char *archive_path,
+                                 const char *entry_name,
+                                 size_t max_len,
+                                 uint8_t **out_data,
+                                 size_t *out_len);
+void solar_os_zip_free(uint8_t *data);
 
 #ifdef __cplusplus
 }

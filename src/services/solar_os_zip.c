@@ -964,6 +964,133 @@ static esp_err_t zip_inflate_file(FILE *archive,
     return ESP_OK;
 }
 
+static esp_err_t zip_reader_find_entry(zip_reader_t *reader,
+                                       const char *entry_name,
+                                       zip_reader_entry_t *out_entry)
+{
+    if (reader == NULL || reader->file == NULL || entry_name == NULL || out_entry == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (fseek(reader->file, reader->central_offset, SEEK_SET) != 0) {
+        return ESP_FAIL;
+    }
+
+    for (uint16_t i = 0; i < reader->entry_count; i++) {
+        zip_reader_entry_t entry;
+        esp_err_t ret = zip_reader_read_central_entry(reader->file, &entry);
+        if (ret != ESP_OK) {
+            return ret;
+        }
+        if (!entry.directory && strcmp(entry.name, entry_name) == 0) {
+            *out_entry = entry;
+            return ESP_OK;
+        }
+        zip_yield();
+    }
+    return ESP_ERR_NOT_FOUND;
+}
+
+static esp_err_t zip_copy_stored_memory(FILE *archive,
+                                        const zip_reader_entry_t *entry,
+                                        uint8_t *output,
+                                        uint32_t *crc32)
+{
+    uint32_t remaining = entry->uncompressed_size;
+    uint32_t offset = 0;
+    *crc32 = MZ_CRC32_INIT;
+
+    while (remaining > 0) {
+        const size_t request = remaining > ZIP_IO_BUFFER_SIZE ? ZIP_IO_BUFFER_SIZE : remaining;
+        const size_t bytes_read = fread(&output[offset], 1, request, archive);
+        if (bytes_read != request) {
+            return ESP_FAIL;
+        }
+        *crc32 = (uint32_t)mz_crc32(*crc32, &output[offset], bytes_read);
+        offset += (uint32_t)bytes_read;
+        remaining -= (uint32_t)bytes_read;
+        zip_yield();
+    }
+    return ESP_OK;
+}
+
+static esp_err_t zip_inflate_memory(FILE *archive,
+                                    const zip_reader_entry_t *entry,
+                                    uint8_t *output,
+                                    uint8_t *input,
+                                    uint8_t *dict,
+                                    uint32_t *crc32,
+                                    uint32_t *bytes_written)
+{
+    tinfl_decompressor *decompressor = zip_calloc(1, sizeof(*decompressor));
+    if (decompressor == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    tinfl_init(decompressor);
+
+    uint32_t compressed_left = entry->compressed_size;
+    size_t input_pos = 0;
+    size_t input_len = 0;
+    size_t dict_pos = 0;
+    tinfl_status status = TINFL_STATUS_NEEDS_MORE_INPUT;
+    *crc32 = MZ_CRC32_INIT;
+    *bytes_written = 0;
+
+    while (status != TINFL_STATUS_DONE) {
+        if (input_pos == input_len && compressed_left > 0) {
+            const size_t request = compressed_left > ZIP_IO_BUFFER_SIZE ?
+                ZIP_IO_BUFFER_SIZE :
+                compressed_left;
+            input_len = fread(input, 1, request, archive);
+            if (input_len != request) {
+                heap_caps_free(decompressor);
+                return ESP_FAIL;
+            }
+            input_pos = 0;
+            compressed_left -= (uint32_t)input_len;
+        }
+
+        size_t in_bytes = input_len - input_pos;
+        size_t out_bytes = ZIP_INFLATE_DICT_SIZE - dict_pos;
+        const uint32_t flags = compressed_left > 0 ? TINFL_FLAG_HAS_MORE_INPUT : 0;
+        status = tinfl_decompress(decompressor,
+                                  &input[input_pos],
+                                  &in_bytes,
+                                  dict,
+                                  &dict[dict_pos],
+                                  &out_bytes,
+                                  flags);
+        input_pos += in_bytes;
+
+        if (out_bytes > 0) {
+            if (*bytes_written > entry->uncompressed_size ||
+                out_bytes > entry->uncompressed_size - *bytes_written) {
+                heap_caps_free(decompressor);
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(&output[*bytes_written], &dict[dict_pos], out_bytes);
+            *crc32 = (uint32_t)mz_crc32(*crc32, &dict[dict_pos], out_bytes);
+            *bytes_written += (uint32_t)out_bytes;
+            dict_pos = (dict_pos + out_bytes) & (ZIP_INFLATE_DICT_SIZE - 1U);
+        }
+
+        if (status < TINFL_STATUS_DONE) {
+            heap_caps_free(decompressor);
+            return ESP_FAIL;
+        }
+        if (status == TINFL_STATUS_NEEDS_MORE_INPUT &&
+            input_pos == input_len &&
+            compressed_left == 0) {
+            heap_caps_free(decompressor);
+            return ESP_FAIL;
+        }
+        zip_yield();
+    }
+
+    heap_caps_free(decompressor);
+    return ESP_OK;
+}
+
 static esp_err_t zip_extract_entry(zip_reader_t *reader,
                                    const zip_reader_entry_t *entry,
                                    const char *dest_dir,
@@ -1197,4 +1324,101 @@ esp_err_t solar_os_zip_extract(const char *archive_path,
     heap_caps_free(dict);
     zip_reader_close(&reader);
     return ret;
+}
+
+esp_err_t solar_os_zip_read_file(const char *archive_path,
+                                 const char *entry_name,
+                                 size_t max_len,
+                                 uint8_t **out_data,
+                                 size_t *out_len)
+{
+    if (archive_path == NULL || archive_path[0] == '\0' ||
+        entry_name == NULL || entry_name[0] == '\0' ||
+        out_data == NULL || out_len == NULL ||
+        !zip_name_is_safe(entry_name)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *out_data = NULL;
+    *out_len = 0;
+
+    zip_reader_t reader;
+    esp_err_t ret = zip_reader_open(&reader, archive_path);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    zip_reader_entry_t entry;
+    ret = zip_reader_find_entry(&reader, entry_name, &entry);
+    if (ret != ESP_OK) {
+        zip_reader_close(&reader);
+        return ret;
+    }
+    if (entry.directory ||
+        entry.uncompressed_size == 0 ||
+        (max_len > 0 && entry.uncompressed_size > max_len)) {
+        zip_reader_close(&reader);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    ret = zip_skip_local_header(reader.file, &entry);
+    if (ret != ESP_OK) {
+        zip_reader_close(&reader);
+        return ret;
+    }
+
+    uint8_t *data = zip_malloc((size_t)entry.uncompressed_size + 1U);
+    uint8_t *input = NULL;
+    uint8_t *dict = NULL;
+    if (data == NULL) {
+        zip_reader_close(&reader);
+        return ESP_ERR_NO_MEM;
+    }
+
+    uint32_t crc32 = 0;
+    uint32_t bytes_written = entry.uncompressed_size;
+    if (entry.method == ZIP_METHOD_STORE) {
+        if (entry.compressed_size != entry.uncompressed_size) {
+            ret = ESP_ERR_INVALID_SIZE;
+        } else {
+            ret = zip_copy_stored_memory(reader.file, &entry, data, &crc32);
+        }
+    } else {
+        input = zip_malloc(ZIP_IO_BUFFER_SIZE);
+        dict = zip_malloc(ZIP_INFLATE_DICT_SIZE);
+        if (input == NULL || dict == NULL) {
+            ret = ESP_ERR_NO_MEM;
+        } else {
+            ret = zip_inflate_memory(reader.file,
+                                     &entry,
+                                     data,
+                                     input,
+                                     dict,
+                                     &crc32,
+                                     &bytes_written);
+        }
+    }
+
+    heap_caps_free(input);
+    heap_caps_free(dict);
+    zip_reader_close(&reader);
+
+    if (ret != ESP_OK) {
+        heap_caps_free(data);
+        return ret;
+    }
+    if (crc32 != entry.crc32 || bytes_written != entry.uncompressed_size) {
+        heap_caps_free(data);
+        return ESP_ERR_INVALID_CRC;
+    }
+
+    data[entry.uncompressed_size] = '\0';
+    *out_data = data;
+    *out_len = entry.uncompressed_size;
+    return ESP_OK;
+}
+
+void solar_os_zip_free(uint8_t *data)
+{
+    heap_caps_free(data);
 }

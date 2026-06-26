@@ -112,7 +112,9 @@ set(SOLAR_OS_SRCS
     "services/solar_os_cdc.c"
     "services/solar_os_clipboard.c"
     "services/solar_os_doc.c"
+    "services/solar_os_epub.c"
     "services/solar_os_gfx.c"
+    "services/solar_os_html.c"
     "services/solar_os_gpio.c"
     "services/solar_os_i2c.c"
     "services/solar_os_identity.c"
@@ -131,6 +133,7 @@ set(SOLAR_OS_SRCS
     "services/solar_os_tui.c"
     "services/solar_os_uart.c"
     "services/solar_os_wifi.c"
+    "services/solar_os_xml.c"
     "services/solar_os_zip.c"
     "services/solar_os_zmodem.c"
 )
