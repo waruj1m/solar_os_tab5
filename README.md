@@ -66,7 +66,7 @@ Each flavor enables packages:
 - `games`: Built-in games.
 - `python`: MicroPython runtime. This currently also enables `net` because the Python module exposes network bindings.
 - `lua`: Lua runtime. This is independent of `python` and does not pull in `net`.
-- `utils`: Text editor, pagers, reader, clock, and serial terminal app.
+- `utils`: Text editor, pager, reader, clock, and serial terminal app.
 
 Use `pkg` on the device to see the compiled flavor and package set. `version` also prints the active flavor.
 
@@ -190,7 +190,7 @@ Hardware and sensors:
 
 - `battery [status|config|capacity|min_voltage|max_voltage]`: read smoothed voltage, infer battery/external power from trend plus the max-voltage shortcut, and configure battery estimate limits.
 - `stream [list|status]`: list timestamped data streams available to DAQ jobs.
-- `daq [status|start|stop]`: start or stop CSV capture from one data stream.
+- `daq [help|status|streams|start|stop]`: start or stop CSV/raw capture from data streams.
 - `gpio [status|list|mode|read|write]`: runtime user GPIO access is limited to GPIO1, GPIO2, GPIO3, and GPIO17.
 - `adc [status|read]`: read analog voltage on ADC-capable runtime GPIOs.
 - `pwm [status|set|off]`: generate LEDC PWM on runtime GPIOs.
@@ -250,17 +250,21 @@ Examples:
 ```text
 stream list
 stream status battery
-daq start battery /logs/battery.csv --rate 60
-daq start temperature humidity battery /logs/env.csv --rate 60
 daq start /logs/env.csv temperature humidity battery --rate 60
-daq start gpio17 /logs/key.csv --changes
-daq start uart0 /logs/serial.csv --rate-ms 25
-daq start uart0 /logs/serial.bin --raw --rate-ms 25
+daq start /logs/battery.csv battery --rate 60
+daq start /logs/key.csv gpio17 --changes
+daq start /logs/serial.bin uart0 --raw --rate-ms 25
+xfer send uart0 /logs/payload.bin --raw
+xfer recv uart0 /logs/capture.bin --raw --idle-ms 5000
+xfer send uart0 /logs/payload.bin --zmodem
+xfer recv uart0 /logs/from-host.bin --zmodem
 daq status
 daq stop
 ```
 
-`daq start` appends by default and writes a CSV header when creating a new CSV file. Use `--replace` to overwrite. Units are encoded in CSV column names, not repeated on every row. Each acquired row or raw byte chunk is flushed and synced to the filesystem before the job continues. `--changes` stores only changed values for single-stream CSV capture. `--raw` is byte-stream only, single-stream only, and writes received bytes directly to the file without timestamps, CSV framing, or a header.
+`daq` without arguments prints usage. `daq streams` lists available stream IDs. `daq start` accepts either file-first or stream-first argument order; file-first is easier to complete for multi-stream captures. It appends by default and writes a CSV header when creating a new CSV file. Use `--replace` to overwrite. Units are encoded in CSV column names, not repeated on every row. Each acquired row or raw byte chunk is flushed and synced to the filesystem before the job continues. `--changes` stores only changed values for single-stream CSV capture. `--raw` is byte-stream only, single-stream only, and writes received bytes directly to the file without timestamps, CSV framing, or a header.
+
+`xfer` is for explicit file transfer over byte-stream ports. Raw send/receive and single-file ZMODEM are supported now; Kermit is a reserved protocol slot. `xfer send <port> <file> --raw` writes file bytes to a port. `xfer recv <port> <file> --raw` captures bytes from a port until stopped, or until `--idle-ms` expires. Use `-d <ms>`/`--delay-ms <ms>` with `send` to pace bytes for slower targets. `xfer send <port> <file> --zmodem` talks to a peer running `rz`; `xfer recv <port> <file> --zmodem` talks to a peer running `sz` and stores the received data at the explicit local path.
 
 ## OTA Release Layout
 
@@ -345,7 +349,8 @@ Applications are launched by typing their name at the shell prompt.
 - `curl`: HTTP/HTTPS GET client with redirect support and optional SD card output.
 - `edit`: Text editor for SD card files with navigation, selection, copy/cut/paste, and PSRAM buffer storage.
 - `less`: Text file pager with wrapping and search.
-- `reader`: Text file pager that remembers per-file position in `/.reader/positions`; `Ctrl++` and `Ctrl-` adjust reader text size.
+- `reader`: Graphics Markdown/text reader using the shared retained document layout engine. Use `reader <file.md|file.txt>`; arrows scroll, page keys turn pages, and `+`/`-` adjusts zoom across 12/14/16/18/20 font sizes. `.txt` files use prose paragraph flow, while `.md`/`.markdown` files use Markdown parsing. Per-file position and zoom are saved in `/.reader/positions`.
+- `notes`: Markdown checklist notes stored as `- [ ]` / `- [x]` items. Use `notes` for `/.notes/default.md` or `notes /notes/todo.md`; `Shift+Up`/`Shift+Down` reorders the selected item inside its active/done section.
 - `plot`: Graphics plotter for live scalar streams or DAQ CSV files. Use `plot temperature humidity battery --rate 1000`, `plot -f /logs/env.csv`, or `plot -f /logs/env.csv temperature humidity`; in live mode `+`/`-` adjusts the rolling time window.
 - `sheet`: CSV grid viewer with simple aggregate formulas such as `=SUM(column)`, `=AVG(column)`, `=MIN(column)`, `=MAX(column)`, `=COUNT(*)`, `=DELTA(column)`, and `=RATE(column)`.
 - `com`: Serial terminal for the exposed UART pins.
@@ -406,7 +411,7 @@ Current conventional files:
 - `/.shell/alias`: optional shell aliases in `<alias> <command-or-app> [fixed args...]` form.
 - `/.shell/user`: optional username for the shell prompt and SSH defaults.
 - `/.shell/hostname`: optional host name for the shell prompt and SSH key comments.
-- `/.reader/positions`: saved text reader offsets keyed by resolved file path.
+- `/.reader/positions`: saved graphics reader position and zoom keyed by resolved file path.
 - `/.ssh/known_hosts`: SSH host key database.
 - `/.ssh/hosts`: static host aliases, one `ip-address hostname` mapping per line.
 - `/.ssh/id_rsa` and `/.ssh/id_rsa.pub`: generated default SSH key pair.
@@ -430,6 +435,8 @@ src/
 The shell command parser currently lives in the shell app. Board and build configuration live in `boards/`, `platformio.ini`, `sdkconfig.defaults`, and target headers under `include/boards/`. Runtime code includes `solar_os_board.h` instead of a board-specific header.
 
 The important rule is that drivers own hardware detail, services own policy, and apps and jobs use services. That lets shell commands, foreground applications, and background jobs share the same behavior for storage, terminal rendering, networking, identity, time, and input.
+
+Document-oriented apps use `services/solar_os_doc.c`, a PSRAM-first Markdown/plain-text document model with blocks, inline runs, source anchors, and retained graphics layout lines/runs. `reader` is the current graphics document app; ZIP, EPUB, RTF, and a future writer can build on the same service instead of each app inventing its own parser and layout path. The graphics font registry uses the generated default font family across document sizes, including regular, bold, italic, and bold-italic faces.
 
 SolarOS runtime roles:
 

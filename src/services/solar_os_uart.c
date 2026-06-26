@@ -15,8 +15,8 @@
 #define UART_NVS_NAMESPACE "uart"
 #define UART_NVS_BAUD_KEY "baud"
 #define UART_NVS_MODE_KEY "mode"
-#define UART_RX_BUFFER_SIZE 1024
-#define UART_TX_BUFFER_SIZE 256
+#define UART_RX_BUFFER_SIZE 4096
+#define UART_TX_BUFFER_SIZE 1024
 
 static const char *TAG = "solar_os_uart";
 

@@ -2,7 +2,6 @@
 
 #include <ctype.h>
 #include <errno.h>
-#include <inttypes.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -15,17 +14,11 @@
 #include "solar_os_keys.h"
 #include "solar_os_shell_io.h"
 #include "solar_os_storage.h"
-#include "solar_os_terminal.h"
 
 #define LESS_MAX_BYTES (2U * 1024U * 1024U)
 #define LESS_SEARCH_MAX 64
 #define LESS_MESSAGE_MAX 72
 #define LESS_TAB_WIDTH 4
-#define READER_STATE_DIR ".reader"
-#define READER_POSITIONS_FILE "positions"
-#define READER_POSITIONS_TMP_FILE "positions.tmp"
-#define READER_POSITION_LINE_MAX (SOLAR_OS_STORAGE_PATH_MAX + 64)
-#define READER_TEXT_SIZE_COUNT 5
 
 typedef enum {
     LESS_INPUT_NORMAL,
@@ -39,10 +32,7 @@ typedef struct {
     size_t match_offset;
     bool match_valid;
     bool error_only;
-    bool remember_position;
-    bool saved_text_size_valid;
     less_input_mode_t input_mode;
-    solar_os_terminal_text_size_t saved_text_size;
     const char *app_name;
     char path[SOLAR_OS_STORAGE_PATH_MAX];
     char display_name[SOLAR_OS_STORAGE_PATH_MAX];
@@ -63,11 +53,6 @@ static solar_os_shell_io_t *less_io(solar_os_context_t *ctx)
         io = &less_fallback_io;
     }
     return io;
-}
-
-static solar_os_terminal_t *less_terminal(solar_os_context_t *ctx)
-{
-    return solar_os_context_terminal(ctx);
 }
 
 static const char *less_app_name(void)
@@ -190,7 +175,7 @@ static size_t less_cell_width(uint8_t ch, size_t col)
     return 1;
 }
 
-static size_t less_visual_end(size_t offset, size_t cols, size_t *next_offset)
+static size_t less_physical_visual_end(size_t offset, size_t cols, size_t *next_offset)
 {
     if (cols == 0) {
         cols = 1;
@@ -277,6 +262,11 @@ static size_t less_visual_end(size_t offset, size_t cols, size_t *next_offset)
     return end;
 }
 
+static size_t less_visual_end(size_t offset, size_t cols, size_t *next_offset)
+{
+    return less_physical_visual_end(offset, cols, next_offset);
+}
+
 static size_t less_next_visual_start(size_t offset, size_t cols)
 {
     size_t next = offset;
@@ -312,7 +302,6 @@ static size_t less_previous_visual_start(size_t offset, size_t cols)
     if (offset > less_state.len) {
         offset = less_state.len;
     }
-
     size_t line_start = less_line_start_for(offset);
     if (line_start == offset) {
         const size_t previous_line = less_previous_line_start(offset);
@@ -390,35 +379,54 @@ static void less_render_header(solar_os_shell_io_t *io)
     less_write_inverse_line(io, header);
 }
 
-static void less_render_text_row(solar_os_shell_io_t *io, size_t row, size_t row_start)
+static bool less_source_highlighted(size_t offset)
+{
+    return less_state.match_valid &&
+        offset >= less_state.match_offset &&
+        offset < less_state.match_offset + less_state.search_len;
+}
+
+static void less_write_source_byte(solar_os_shell_io_t *io,
+                                   uint8_t byte,
+                                   size_t source_offset,
+                                   size_t *visual_col,
+                                   size_t *written,
+                                   size_t cols)
+{
+    const bool is_tab = byte == '\t';
+    const size_t span = less_cell_width(byte, *visual_col);
+
+    solar_os_shell_io_set_inverse(io, less_source_highlighted(source_offset));
+    for (size_t j = 0; j < span && *written < cols; j++) {
+        if (is_tab) {
+            solar_os_shell_io_put_char(io, ' ');
+        } else {
+            solar_os_shell_io_put_char(io, less_is_printable(byte) ? (char)byte : '.');
+        }
+        (*written)++;
+        (*visual_col)++;
+    }
+}
+
+static void less_render_physical_text_row(solar_os_shell_io_t *io, size_t row, size_t row_start)
 {
     const size_t cols = less_cols_or_one(io);
     size_t next = row_start;
-    const size_t row_end = less_visual_end(row_start, cols, &next);
+    const size_t row_end = less_physical_visual_end(row_start, cols, &next);
     size_t visual_col = 0;
     size_t written = 0;
 
     solar_os_shell_io_set_cursor(io, row, 0);
     for (size_t i = row_start; i < row_end && written < cols; i++) {
         const uint8_t byte = (uint8_t)less_state.buffer[i];
-        const bool is_tab = byte == '\t';
-        const size_t span = less_cell_width(byte, visual_col);
-        const bool highlighted = less_state.match_valid &&
-            i >= less_state.match_offset &&
-            i < less_state.match_offset + less_state.search_len;
-
-        solar_os_shell_io_set_inverse(io, highlighted);
-        for (size_t j = 0; j < span && written < cols; j++) {
-            if (is_tab) {
-                solar_os_shell_io_put_char(io, ' ');
-            } else {
-                solar_os_shell_io_put_char(io, less_is_printable(byte) ? (char)byte : '.');
-            }
-            written++;
-            visual_col++;
-        }
+        less_write_source_byte(io, byte, i, &visual_col, &written, cols);
     }
     solar_os_shell_io_set_inverse(io, false);
+}
+
+static void less_render_text_row(solar_os_shell_io_t *io, size_t row, size_t row_start)
+{
+    less_render_physical_text_row(io, row, row_start);
 }
 
 static void less_render_error(solar_os_context_t *ctx)
@@ -523,64 +531,6 @@ static void less_move_bottom(solar_os_context_t *ctx)
     }
     less_state.top_offset = offset;
     less_set_message("");
-}
-
-static bool reader_adjust_text_size(solar_os_context_t *ctx, int delta)
-{
-    static const solar_os_terminal_text_size_t text_sizes[READER_TEXT_SIZE_COUNT] = {
-        SOLAR_OS_TERMINAL_TEXT_SIZE_12,
-        SOLAR_OS_TERMINAL_TEXT_SIZE_14,
-        SOLAR_OS_TERMINAL_TEXT_SIZE_16,
-        SOLAR_OS_TERMINAL_TEXT_SIZE_18,
-        SOLAR_OS_TERMINAL_TEXT_SIZE_20,
-    };
-
-    if (!less_state.remember_position) {
-        return false;
-    }
-    if (solar_os_shell_io_kind(less_io(ctx)) != SOLAR_OS_SHELL_IO_KIND_TERMINAL) {
-        less_set_message("textsize display only");
-        return true;
-    }
-
-    solar_os_terminal_t *term = less_terminal(ctx);
-    const solar_os_terminal_text_size_t current = solar_os_terminal_text_size(term);
-    size_t index = 0;
-    for (size_t i = 0; i < READER_TEXT_SIZE_COUNT; i++) {
-        if (text_sizes[i] == current) {
-            index = i;
-            break;
-        }
-    }
-
-    size_t next = index;
-    if (delta > 0) {
-        if (next + 1 < READER_TEXT_SIZE_COUNT) {
-            next++;
-        }
-    } else if (delta < 0 && next > 0) {
-        next--;
-    }
-
-    if (next == index) {
-        less_set_message(delta > 0 ? "textsize max" : "textsize min");
-        return true;
-    }
-
-    const size_t anchor = less_state.top_offset;
-    if (solar_os_terminal_set_text_size_transient(term, text_sizes[next]) != ESP_OK) {
-        less_set_message("textsize failed");
-        return true;
-    }
-
-    less_state.top_offset = less_visual_start_for_offset(anchor, less_cols_or_one(less_io(ctx)));
-    char message[LESS_MESSAGE_MAX];
-    snprintf(message,
-             sizeof(message),
-             "textsize %s",
-             solar_os_terminal_text_size_name(text_sizes[next]));
-    less_set_message(message);
-    return true;
 }
 
 static bool less_search_char_equal(char a, char b)
@@ -785,176 +735,10 @@ static esp_err_t less_load_file(void)
     return ESP_OK;
 }
 
-static esp_err_t reader_state_path(char *path, size_t path_len, const char *leaf)
-{
-    if (path == NULL || path_len == 0 || !solar_os_storage_is_mounted()) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    const char *mount = solar_os_storage_mount_point();
-    const int written = leaf == NULL ?
-        snprintf(path, path_len, "%s/%s", mount, READER_STATE_DIR) :
-        snprintf(path, path_len, "%s/%s/%s", mount, READER_STATE_DIR, leaf);
-    return written >= 0 && (size_t)written < path_len ? ESP_OK : ESP_ERR_INVALID_SIZE;
-}
-
-static esp_err_t reader_ensure_state_dir(void)
-{
-    char dir[SOLAR_OS_STORAGE_PATH_MAX];
-    esp_err_t ret = reader_state_path(dir, sizeof(dir), NULL);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-
-    struct stat st;
-    if (stat(dir, &st) == 0) {
-        return S_ISDIR(st.st_mode) ? ESP_OK : ESP_ERR_INVALID_STATE;
-    }
-
-    if (mkdir(dir, 0777) == 0 || errno == EEXIST) {
-        return ESP_OK;
-    }
-    return ESP_FAIL;
-}
-
-static bool reader_parse_position_line(char *line,
-                                       uint64_t *offset,
-                                       uint64_t *len,
-                                       char **path)
-{
-    int path_index = 0;
-
-    if (line == NULL || offset == NULL || len == NULL || path == NULL) {
-        return false;
-    }
-    if (sscanf(line, "%" SCNu64 " %" SCNu64 " %n", offset, len, &path_index) != 2 ||
-        path_index <= 0 ||
-        line[path_index] == '\0') {
-        return false;
-    }
-
-    *path = &line[path_index];
-    (*path)[strcspn(*path, "\r\n")] = '\0';
-    return (*path)[0] != '\0';
-}
-
-static void reader_load_position(solar_os_context_t *ctx)
-{
-    char positions_path[SOLAR_OS_STORAGE_PATH_MAX];
-    char line[READER_POSITION_LINE_MAX];
-
-    if (!less_state.remember_position ||
-        reader_state_path(positions_path, sizeof(positions_path), READER_POSITIONS_FILE) != ESP_OK) {
-        return;
-    }
-
-    FILE *file = fopen(positions_path, "r");
-    if (file == NULL) {
-        return;
-    }
-
-    while (fgets(line, sizeof(line), file) != NULL) {
-        uint64_t saved_offset = 0;
-        uint64_t saved_len = 0;
-        char *saved_path = NULL;
-        if (!reader_parse_position_line(line, &saved_offset, &saved_len, &saved_path) ||
-            strcmp(saved_path, less_state.path) != 0) {
-            continue;
-        }
-
-        if (saved_offset > less_state.len) {
-            saved_offset = less_state.len;
-        }
-        less_state.top_offset =
-            less_visual_start_for_offset((size_t)saved_offset,
-                                         less_cols_or_one(less_io(ctx)));
-        less_set_message(saved_len == less_state.len ? "resumed" : "resumed, file changed");
-        break;
-    }
-
-    fclose(file);
-}
-
-static bool reader_same_position_path(const char *line)
-{
-    char copy[READER_POSITION_LINE_MAX];
-    uint64_t offset = 0;
-    uint64_t len = 0;
-    char *path = NULL;
-
-    if (line == NULL) {
-        return false;
-    }
-
-    strlcpy(copy, line, sizeof(copy));
-    return reader_parse_position_line(copy, &offset, &len, &path) &&
-        strcmp(path, less_state.path) == 0;
-}
-
-static void reader_save_position(void)
-{
-    char positions_path[SOLAR_OS_STORAGE_PATH_MAX];
-    char tmp_path[SOLAR_OS_STORAGE_PATH_MAX];
-    char line[READER_POSITION_LINE_MAX];
-
-    if (!less_state.remember_position ||
-        less_state.error_only ||
-        less_state.path[0] == '\0' ||
-        reader_ensure_state_dir() != ESP_OK ||
-        reader_state_path(positions_path, sizeof(positions_path), READER_POSITIONS_FILE) != ESP_OK ||
-        reader_state_path(tmp_path, sizeof(tmp_path), READER_POSITIONS_TMP_FILE) != ESP_OK) {
-        return;
-    }
-
-    FILE *source = fopen(positions_path, "r");
-    FILE *dest = fopen(tmp_path, "w");
-    if (dest == NULL) {
-        if (source != NULL) {
-            fclose(source);
-        }
-        return;
-    }
-
-    if (source != NULL) {
-        while (fgets(line, sizeof(line), source) != NULL) {
-            if (!reader_same_position_path(line)) {
-                fputs(line, dest);
-            }
-        }
-        fclose(source);
-    }
-
-    fprintf(dest,
-            "%" PRIu64 " %" PRIu64 " %s\n",
-            (uint64_t)less_state.top_offset,
-            (uint64_t)less_state.len,
-            less_state.path);
-    const bool ok = ferror(dest) == 0;
-    fclose(dest);
-
-    if (!ok) {
-        (void)remove(tmp_path);
-        return;
-    }
-
-    (void)remove(positions_path);
-    if (rename(tmp_path, positions_path) != 0) {
-        (void)remove(tmp_path);
-    }
-}
-
-static esp_err_t less_start_common(solar_os_context_t *ctx,
-                                   const char *app_name,
-                                   bool remember_position)
+static esp_err_t less_start_common(solar_os_context_t *ctx, const char *app_name)
 {
     memset(&less_state, 0, sizeof(less_state));
     less_state.app_name = app_name;
-    less_state.remember_position = remember_position;
-    if (remember_position &&
-        solar_os_shell_io_kind(less_io(ctx)) == SOLAR_OS_SHELL_IO_KIND_TERMINAL) {
-        less_state.saved_text_size = solar_os_terminal_text_size(less_terminal(ctx));
-        less_state.saved_text_size_valid = true;
-    }
 
     const int argc = solar_os_context_argc(ctx);
     if (argc != 2) {
@@ -985,30 +769,18 @@ static esp_err_t less_start_common(solar_os_context_t *ctx,
     }
 
     less_state.top_offset = 0;
-    reader_load_position(ctx);
     less_render(ctx);
     return ESP_OK;
 }
 
 static esp_err_t less_start(solar_os_context_t *ctx)
 {
-    return less_start_common(ctx, "less", false);
-}
-
-static esp_err_t reader_start(solar_os_context_t *ctx)
-{
-    return less_start_common(ctx, "reader", true);
+    return less_start_common(ctx, "less");
 }
 
 static void less_stop(solar_os_context_t *ctx)
 {
-    reader_save_position();
-    if (less_state.remember_position &&
-        less_state.saved_text_size_valid &&
-        solar_os_shell_io_kind(less_io(ctx)) == SOLAR_OS_SHELL_IO_KIND_TERMINAL) {
-        (void)solar_os_terminal_set_text_size_transient(less_terminal(ctx),
-                                                       less_state.saved_text_size);
-    }
+    (void)ctx;
     heap_caps_free(less_state.buffer);
     memset(&less_state, 0, sizeof(less_state));
 }
@@ -1028,19 +800,6 @@ static bool less_event(solar_os_context_t *ctx, const solar_os_event_t *event)
     if (less_state.error_only) {
         if (ch == SOLAR_OS_KEY_ESCAPE || ch == 'q' || ch == 'Q') {
             solar_os_context_request_exit(ctx);
-        }
-        return true;
-    }
-
-    if (ch == SOLAR_OS_KEY_CTRL_PLUS) {
-        if (reader_adjust_text_size(ctx, 1)) {
-            less_render(ctx);
-        }
-        return true;
-    }
-    if (ch == 0x1f) {
-        if (reader_adjust_text_size(ctx, -1)) {
-            less_render(ctx);
         }
         return true;
     }
@@ -1104,14 +863,6 @@ const solar_os_app_t solar_os_less_app = {
     .name = "less",
     .summary = "text file pager",
     .start = less_start,
-    .stop = less_stop,
-    .event = less_event,
-};
-
-const solar_os_app_t solar_os_reader_app = {
-    .name = "reader",
-    .summary = "resumable text reader",
-    .start = reader_start,
     .stop = less_stop,
     .event = less_event,
 };

@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "esp_heap_caps.h"
+#include "solar_os_fonts.h"
 #include "solar_os_log.h"
 #include "nvs.h"
 
@@ -27,6 +28,7 @@ typedef struct {
     const char *name;
     const uint8_t *regular_font[SOLAR_OS_TERMINAL_FONT_COMPACT + 1];
     const uint8_t *bold_font[SOLAR_OS_TERMINAL_FONT_COMPACT + 1];
+    uint8_t cell_width[SOLAR_OS_TERMINAL_FONT_COMPACT + 1];
 } terminal_text_size_profile_t;
 
 static const terminal_font_family_t terminal_font_families[] = {
@@ -42,48 +44,76 @@ static const terminal_text_size_profile_t terminal_text_sizes[SOLAR_OS_TERMINAL_
     [SOLAR_OS_TERMINAL_TEXT_SIZE_12] = {
         .name = "12",
         .regular_font = {
-            [SOLAR_OS_TERMINAL_FONT_MONO] = u8g2_font_6x12_tf,
-            [SOLAR_OS_TERMINAL_FONT_COMPACT] = u8g2_font_6x12_tf,
+            [SOLAR_OS_TERMINAL_FONT_MONO] = u8g2_font_solar_os_default_r_12_tf,
+            [SOLAR_OS_TERMINAL_FONT_COMPACT] = u8g2_font_solar_os_default_r_12_tf,
+        },
+        .bold_font = {
+            [SOLAR_OS_TERMINAL_FONT_MONO] = u8g2_font_solar_os_default_b_12_tf,
+            [SOLAR_OS_TERMINAL_FONT_COMPACT] = u8g2_font_solar_os_default_b_12_tf,
+        },
+        .cell_width = {
+            [SOLAR_OS_TERMINAL_FONT_MONO] = 6,
+            [SOLAR_OS_TERMINAL_FONT_COMPACT] = 5,
         },
     },
     [SOLAR_OS_TERMINAL_TEXT_SIZE_14] = {
         .name = "14",
         .regular_font = {
-            [SOLAR_OS_TERMINAL_FONT_MONO] = u8g2_font_7x13_tf,
-            [SOLAR_OS_TERMINAL_FONT_COMPACT] = u8g2_font_6x13_tf,
+            [SOLAR_OS_TERMINAL_FONT_MONO] = u8g2_font_solar_os_default_r_14_tf,
+            [SOLAR_OS_TERMINAL_FONT_COMPACT] = u8g2_font_solar_os_default_r_12_tf,
         },
         .bold_font = {
-            [SOLAR_OS_TERMINAL_FONT_MONO] = u8g2_font_7x13B_tf,
-            [SOLAR_OS_TERMINAL_FONT_COMPACT] = u8g2_font_6x13B_tf,
+            [SOLAR_OS_TERMINAL_FONT_MONO] = u8g2_font_solar_os_default_b_14_tf,
+            [SOLAR_OS_TERMINAL_FONT_COMPACT] = u8g2_font_solar_os_default_b_12_tf,
+        },
+        .cell_width = {
+            [SOLAR_OS_TERMINAL_FONT_MONO] = 7,
+            [SOLAR_OS_TERMINAL_FONT_COMPACT] = 6,
         },
     },
     [SOLAR_OS_TERMINAL_TEXT_SIZE_16] = {
         .name = "16",
         .regular_font = {
-            [SOLAR_OS_TERMINAL_FONT_MONO] = u8g2_font_9x15_tf,
-            [SOLAR_OS_TERMINAL_FONT_COMPACT] = u8g2_font_9x15_tf,
+            [SOLAR_OS_TERMINAL_FONT_MONO] = u8g2_font_solar_os_default_r_16_tf,
+            [SOLAR_OS_TERMINAL_FONT_COMPACT] = u8g2_font_solar_os_default_r_14_tf,
         },
         .bold_font = {
-            [SOLAR_OS_TERMINAL_FONT_MONO] = u8g2_font_9x15B_tf,
-            [SOLAR_OS_TERMINAL_FONT_COMPACT] = u8g2_font_9x15B_tf,
+            [SOLAR_OS_TERMINAL_FONT_MONO] = u8g2_font_solar_os_default_b_16_tf,
+            [SOLAR_OS_TERMINAL_FONT_COMPACT] = u8g2_font_solar_os_default_b_14_tf,
+        },
+        .cell_width = {
+            [SOLAR_OS_TERMINAL_FONT_MONO] = 8,
+            [SOLAR_OS_TERMINAL_FONT_COMPACT] = 6,
         },
     },
     [SOLAR_OS_TERMINAL_TEXT_SIZE_18] = {
         .name = "18",
         .regular_font = {
-            [SOLAR_OS_TERMINAL_FONT_MONO] = u8g2_font_9x18_tf,
-            [SOLAR_OS_TERMINAL_FONT_COMPACT] = u8g2_font_9x18_tf,
+            [SOLAR_OS_TERMINAL_FONT_MONO] = u8g2_font_solar_os_default_r_18_tf,
+            [SOLAR_OS_TERMINAL_FONT_COMPACT] = u8g2_font_solar_os_default_r_16_tf,
         },
         .bold_font = {
-            [SOLAR_OS_TERMINAL_FONT_MONO] = u8g2_font_9x18B_tf,
-            [SOLAR_OS_TERMINAL_FONT_COMPACT] = u8g2_font_9x18B_tf,
+            [SOLAR_OS_TERMINAL_FONT_MONO] = u8g2_font_solar_os_default_b_18_tf,
+            [SOLAR_OS_TERMINAL_FONT_COMPACT] = u8g2_font_solar_os_default_b_16_tf,
+        },
+        .cell_width = {
+            [SOLAR_OS_TERMINAL_FONT_MONO] = 9,
+            [SOLAR_OS_TERMINAL_FONT_COMPACT] = 7,
         },
     },
     [SOLAR_OS_TERMINAL_TEXT_SIZE_20] = {
         .name = "20",
         .regular_font = {
-            [SOLAR_OS_TERMINAL_FONT_MONO] = u8g2_font_10x20_tf,
-            [SOLAR_OS_TERMINAL_FONT_COMPACT] = u8g2_font_10x20_tf,
+            [SOLAR_OS_TERMINAL_FONT_MONO] = u8g2_font_solar_os_default_r_20_tf,
+            [SOLAR_OS_TERMINAL_FONT_COMPACT] = u8g2_font_solar_os_default_r_18_tf,
+        },
+        .bold_font = {
+            [SOLAR_OS_TERMINAL_FONT_MONO] = u8g2_font_solar_os_default_b_20_tf,
+            [SOLAR_OS_TERMINAL_FONT_COMPACT] = u8g2_font_solar_os_default_b_18_tf,
+        },
+        .cell_width = {
+            [SOLAR_OS_TERMINAL_FONT_MONO] = 10,
+            [SOLAR_OS_TERMINAL_FONT_COMPACT] = 8,
         },
     },
 };
@@ -188,7 +218,7 @@ static const uint8_t *terminal_selected_font(const solar_os_terminal_t *terminal
     if (profile->regular_font[font] != NULL) {
         return profile->regular_font[font];
     }
-    return u8g2_font_7x13_tf;
+    return u8g2_font_solar_os_default_r_14_tf;
 }
 
 static uint8_t terminal_text_scale(const solar_os_terminal_t *terminal)
@@ -352,6 +382,14 @@ static void terminal_apply_settings(solar_os_terminal_t *terminal, bool clear_sc
     u8g2_SetFont(u8g2, terminal_selected_font(terminal, false));
 
     int char_width = regular_width > bold_width ? regular_width : bold_width;
+    const terminal_text_size_profile_t *profile =
+        terminal_text_size_is_valid(terminal->text_size) ?
+        &terminal_text_sizes[terminal->text_size] :
+        &terminal_text_sizes[SOLAR_OS_TERMINAL_TEXT_SIZE_14];
+    if ((size_t)terminal->font < sizeof(profile->cell_width) / sizeof(profile->cell_width[0]) &&
+        profile->cell_width[terminal->font] > 0) {
+        char_width = profile->cell_width[terminal->font];
+    }
     if (char_width <= 0) {
         char_width = 6;
     }
@@ -1922,7 +1960,7 @@ static void terminal_draw_status_bar(solar_os_terminal_t *terminal, u8g2_t *u8g2
     terminal_draw_speaker_icon(u8g2, x, icon_y, status->audio_enabled, status->audio_volume);
     x += 24;
 
-    u8g2_SetFont(u8g2, u8g2_font_6x13_tf);
+    u8g2_SetFont(u8g2, u8g2_font_solar_os_default_r_12_tf);
     u8g2_SetFontMode(u8g2, 1);
     u8g2_SetFontPosBaseline(u8g2);
 

@@ -145,6 +145,7 @@ static const shell_command_t shell_builtin_commands[] = {
     {"daq", "capture data streams", solar_os_shell_cmd_daq},
     {"log", "show SolarOS logs", solar_os_shell_cmd_log},
     {"port", "show byte-stream ports", solar_os_shell_cmd_port},
+    {"xfer", "transfer files over byte-stream ports", solar_os_shell_cmd_xfer},
     {"df", "show SD card free space", solar_os_shell_cmd_df},
     {"sd", "SD card control", solar_os_shell_cmd_sd},
     {"top", "show task resource usage", solar_os_shell_cmd_top},
@@ -304,6 +305,24 @@ static const char * const port_subcommands[] = {
     "status",
 };
 
+static const char * const xfer_subcommands[] = {
+    "send",
+    "recv",
+    "protocols",
+};
+
+static const char * const xfer_options[] = {
+    "--raw",
+    "--protocol",
+    "--delay-ms",
+    "-d",
+    "--append",
+    "--replace",
+    "--idle-ms",
+};
+
+static const char * const xfer_protocol_values[] = {"raw", "zmodem", "kermit"};
+
 static const char * const log_subcommands[] = {
     "status",
     "show",
@@ -397,7 +416,7 @@ static const char * const ota_subcommands[] = {
 static const char * const ota_boot_values[] = {"0", "1"};
 static const char * const ota_flavor_values[] = {"core", "full"};
 static const char * const stream_subcommands[] = {"list", "status"};
-static const char * const daq_subcommands[] = {"status", "start", "stop"};
+static const char * const daq_subcommands[] = {"help", "status", "streams", "start", "stop"};
 static const char * const daq_options[] = {
     "--rate",
     "--rate-ms",
@@ -406,6 +425,8 @@ static const char * const daq_options[] = {
     "--replace",
     "--raw",
 };
+static const char * const daq_rate_values[] = {"1", "5", "10", "60"};
+static const char * const daq_rate_ms_values[] = {"0", "25", "100", "1000"};
 static const char * const watch_subcommands[] = {"-n"};
 static const char * const ls_options[] = {"-a", "-h", "--"};
 static const char * const rm_options[] = {"-f", "-rf"};
@@ -423,8 +444,10 @@ static const char * const path_rm[] = {"rm"};
 static const char * const path_view[] = {"view"};
 #endif
 #if SOLAR_OS_PACKAGE_UTILS
+static const char * const path_notes[] = {"notes"};
 static const char * const path_plot[] = {"plot"};
 static const char * const path_plot_file[] = {"plot", "-f"};
+static const char * const path_reader[] = {"reader"};
 static const char * const path_plot_long_file[] = {"plot", "--file"};
 static const char * const path_plot_stream[] = {"plot", SHELL_COMPLETION_ANY};
 #endif
@@ -514,6 +537,37 @@ static const char * const path_uart[] = {"uart"};
 static const char * const path_uart_mode[] = {"uart", "mode"};
 static const char * const path_port[] = {"port"};
 static const char * const path_port_status[] = {"port", "status"};
+static const char * const path_xfer[] = {"xfer"};
+static const char * const path_xfer_send[] = {"xfer", "send"};
+static const char * const path_xfer_recv[] = {"xfer", "recv"};
+static const char * const path_xfer_send_port[] = {"xfer", "send", SHELL_COMPLETION_ANY};
+static const char * const path_xfer_recv_port[] = {"xfer", "recv", SHELL_COMPLETION_ANY};
+static const char * const path_xfer_send_port_file[] = {
+    "xfer",
+    "send",
+    SHELL_COMPLETION_ANY,
+    SHELL_COMPLETION_ANY,
+};
+static const char * const path_xfer_recv_port_file[] = {
+    "xfer",
+    "recv",
+    SHELL_COMPLETION_ANY,
+    SHELL_COMPLETION_ANY,
+};
+static const char * const path_xfer_send_protocol[] = {
+    "xfer",
+    "send",
+    SHELL_COMPLETION_ANY,
+    SHELL_COMPLETION_ANY,
+    "--protocol",
+};
+static const char * const path_xfer_recv_protocol[] = {
+    "xfer",
+    "recv",
+    SHELL_COMPLETION_ANY,
+    SHELL_COMPLETION_ANY,
+    "--protocol",
+};
 static const char * const path_log[] = {"log"};
 static const char * const path_log_follow[] = {"log", "follow"};
 static const char * const path_log_level[] = {"log", "level"};
@@ -611,12 +665,14 @@ static const shell_completion_rule_t shell_completion_rules[] = {
     SHELL_COMPLETION_OPTIONS(path_view, view_options),
 #endif
 #if SOLAR_OS_PACKAGE_UTILS
+    SHELL_COMPLETION_PATH(path_notes, false),
     SHELL_COMPLETION_OPTIONS(path_plot, plot_options),
     SHELL_COMPLETION_SCALAR_STREAMS(path_plot),
     SHELL_COMPLETION_OPTIONS(path_plot_stream, plot_live_options),
     SHELL_COMPLETION_SCALAR_STREAMS(path_plot_stream),
     SHELL_COMPLETION_PATH(path_plot_file, false),
     SHELL_COMPLETION_PATH(path_plot_long_file, false),
+    SHELL_COMPLETION_PATH(path_reader, false),
 #endif
     SHELL_COMPLETION_STATIC(path_watch, watch_subcommands),
     SHELL_COMPLETION_COMMANDS(path_watch),
@@ -682,6 +738,15 @@ static const shell_completion_rule_t shell_completion_rules[] = {
     SHELL_COMPLETION_STATIC(path_uart_mode, uart_mode_values),
     SHELL_COMPLETION_STATIC(path_port, port_subcommands),
     SHELL_COMPLETION_PORTS(path_port_status),
+    SHELL_COMPLETION_STATIC(path_xfer, xfer_subcommands),
+    SHELL_COMPLETION_PORTS(path_xfer_send),
+    SHELL_COMPLETION_PORTS(path_xfer_recv),
+    SHELL_COMPLETION_PATH(path_xfer_send_port, false),
+    SHELL_COMPLETION_PATH(path_xfer_recv_port, false),
+    SHELL_COMPLETION_STATIC(path_xfer_send_port_file, xfer_options),
+    SHELL_COMPLETION_STATIC(path_xfer_recv_port_file, xfer_options),
+    SHELL_COMPLETION_STATIC(path_xfer_send_protocol, xfer_protocol_values),
+    SHELL_COMPLETION_STATIC(path_xfer_recv_protocol, xfer_protocol_values),
     SHELL_COMPLETION_STATIC(path_log, log_subcommands),
     SHELL_COMPLETION_STATIC(path_log_follow, log_level_values),
     SHELL_COMPLETION_STATIC(path_log_level, log_level_values),
@@ -794,6 +859,17 @@ static esp_err_t resolve_path(solar_os_context_t *ctx, const char *arg, char *pa
     }
 
     return solar_os_storage_resolve_path_at(session->cwd, arg, path, path_len);
+}
+
+esp_err_t solar_os_shell_resolve_path(solar_os_context_t *ctx,
+                                      const char *arg,
+                                      char *path,
+                                      size_t path_len)
+{
+    if (ctx == NULL || path == NULL || path_len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return resolve_path(ctx, arg, path, path_len);
 }
 
 static bool resolve_path_for_command(solar_os_context_t *ctx,
@@ -2354,6 +2430,341 @@ static void shell_completion_emit_streams(shell_completion_match_t *state, bool 
     }
 }
 
+typedef enum {
+    SHELL_DAQ_COMPLETION_SUBCOMMANDS,
+    SHELL_DAQ_COMPLETION_OPTIONS,
+    SHELL_DAQ_COMPLETION_RATE,
+    SHELL_DAQ_COMPLETION_RATE_MS,
+    SHELL_DAQ_COMPLETION_STREAMS_ALL,
+    SHELL_DAQ_COMPLETION_STREAMS_BYTES,
+    SHELL_DAQ_COMPLETION_STREAMS_CSV,
+} shell_daq_completion_kind_t;
+
+typedef struct {
+    const char *positionals[SHELL_ARG_MAX];
+    size_t positional_count;
+    bool raw;
+    bool first_pos_is_stream;
+    bool stream_first_file_seen;
+    solar_os_stream_type_t first_pos_type;
+} shell_daq_completed_t;
+
+static void shell_completion_init_state(solar_os_context_t *ctx,
+                                        const char *prefix,
+                                        bool print,
+                                        shell_completion_match_t *state)
+{
+    memset(state, 0, sizeof(*state));
+    state->ctx = ctx;
+    state->io = shell_io(ctx);
+    state->prefix = prefix;
+    state->print = print;
+}
+
+static bool shell_token_looks_like_path(const char *token)
+{
+    return token != NULL &&
+        (token[0] == '/' ||
+         token[0] == '.' ||
+         strchr(token, '/') != NULL ||
+         strchr(token, '*') != NULL ||
+         strchr(token, '?') != NULL);
+}
+
+static bool shell_daq_option_takes_value(const char *token)
+{
+    return token != NULL &&
+        (strcmp(token, "--rate") == 0 ||
+         strcmp(token, "--rate-ms") == 0);
+}
+
+static bool shell_daq_stream_type_allowed(solar_os_stream_type_t type,
+                                          shell_daq_completion_kind_t kind)
+{
+    switch (kind) {
+    case SHELL_DAQ_COMPLETION_STREAMS_BYTES:
+        return type == SOLAR_OS_STREAM_TYPE_BYTES;
+    case SHELL_DAQ_COMPLETION_STREAMS_CSV:
+        return type != SOLAR_OS_STREAM_TYPE_BYTES;
+    case SHELL_DAQ_COMPLETION_STREAMS_ALL:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static void shell_completion_emit_daq_streams(shell_completion_match_t *state,
+                                              shell_daq_completion_kind_t kind)
+{
+    const size_t count = solar_os_stream_count();
+
+    for (size_t i = 0; i < count; i++) {
+        solar_os_stream_info_t info;
+        if (solar_os_stream_get(i, &info) &&
+            shell_daq_stream_type_allowed(info.type, kind)) {
+            shell_completion_emit(state, info.id);
+        }
+    }
+}
+
+static void shell_completion_emit_daq_kind(shell_completion_match_t *state,
+                                           shell_daq_completion_kind_t kind)
+{
+    switch (kind) {
+    case SHELL_DAQ_COMPLETION_SUBCOMMANDS:
+        for (size_t i = 0; i < SHELL_ARRAY_COUNT(daq_subcommands); i++) {
+            shell_completion_emit(state, daq_subcommands[i]);
+        }
+        break;
+    case SHELL_DAQ_COMPLETION_OPTIONS:
+        for (size_t i = 0; i < SHELL_ARRAY_COUNT(daq_options); i++) {
+            shell_completion_emit(state, daq_options[i]);
+        }
+        break;
+    case SHELL_DAQ_COMPLETION_RATE:
+        for (size_t i = 0; i < SHELL_ARRAY_COUNT(daq_rate_values); i++) {
+            shell_completion_emit(state, daq_rate_values[i]);
+        }
+        break;
+    case SHELL_DAQ_COMPLETION_RATE_MS:
+        for (size_t i = 0; i < SHELL_ARRAY_COUNT(daq_rate_ms_values); i++) {
+            shell_completion_emit(state, daq_rate_ms_values[i]);
+        }
+        break;
+    case SHELL_DAQ_COMPLETION_STREAMS_ALL:
+    case SHELL_DAQ_COMPLETION_STREAMS_BYTES:
+    case SHELL_DAQ_COMPLETION_STREAMS_CSV:
+        shell_completion_emit_daq_streams(state, kind);
+        break;
+    }
+}
+
+static bool shell_complete_daq_kind(solar_os_context_t *ctx,
+                                    shell_daq_completion_kind_t kind,
+                                    const char *prefix,
+                                    size_t token_start,
+                                    bool show_matches)
+{
+    shell_completion_match_t state;
+    shell_completion_init_state(ctx, prefix, false, &state);
+    shell_completion_emit_daq_kind(&state, kind);
+    if (state.count == 0) {
+        return true;
+    }
+
+    shell_session(ctx)->history_browsing = false;
+    shell_session(ctx)->history_index = -1;
+
+    if (state.count == 1 && !show_matches) {
+        char completed[SHELL_INPUT_MAX];
+        snprintf(completed,
+                 sizeof(completed),
+                 "%.*s%s ",
+                 (int)token_start,
+                 shell_session(ctx)->input,
+                 state.match);
+        shell_replace_input(ctx, completed);
+        return true;
+    }
+
+    if (show_matches) {
+        char original[SHELL_INPUT_MAX];
+        strlcpy(original, shell_session(ctx)->input, sizeof(original));
+        solar_os_shell_io_newline(shell_io(ctx));
+        shell_completion_init_state(ctx, prefix, true, &state);
+        shell_completion_emit_daq_kind(&state, kind);
+        shell_prompt(ctx);
+        shell_replace_input(ctx, original);
+    }
+
+    return true;
+}
+
+static bool shell_daq_kind_has_match(solar_os_context_t *ctx,
+                                     shell_daq_completion_kind_t kind,
+                                     const char *prefix)
+{
+    shell_completion_match_t state;
+    shell_completion_init_state(ctx, prefix, false, &state);
+    shell_completion_emit_daq_kind(&state, kind);
+    return state.count > 0;
+}
+
+static void shell_daq_analyze_completed(const shell_completion_parse_t *parse,
+                                        size_t current_index,
+                                        shell_daq_completed_t *completed)
+{
+    bool skip_value = false;
+
+    memset(completed, 0, sizeof(*completed));
+
+    for (size_t i = 2; i < current_index && i < parse->count; i++) {
+        const char *token = parse->tokens[i];
+
+        if (skip_value) {
+            skip_value = false;
+            continue;
+        }
+        if (strcmp(token, "--raw") == 0) {
+            completed->raw = true;
+            continue;
+        }
+        if (shell_daq_option_takes_value(token)) {
+            skip_value = true;
+            continue;
+        }
+        if (token[0] == '-') {
+            continue;
+        }
+        if (completed->positional_count < SHELL_ARRAY_COUNT(completed->positionals)) {
+            completed->positionals[completed->positional_count++] = token;
+        }
+    }
+
+    if (completed->positional_count > 0) {
+        solar_os_stream_info_t info;
+        if (solar_os_stream_get_info(completed->positionals[0], &info) == ESP_OK) {
+            completed->first_pos_is_stream = true;
+            completed->first_pos_type = info.type;
+        }
+    }
+    if (completed->first_pos_is_stream) {
+        for (size_t i = 1; i < completed->positional_count; i++) {
+            solar_os_stream_info_t info;
+            if (solar_os_stream_get_info(completed->positionals[i], &info) != ESP_OK) {
+                completed->stream_first_file_seen = true;
+                break;
+            }
+        }
+    }
+}
+
+static bool shell_complete_daq_start(solar_os_context_t *ctx,
+                                     const shell_completion_parse_t *parse,
+                                     size_t current_index,
+                                     size_t token_start,
+                                     bool show_matches)
+{
+    const char *prefix = "";
+    if (!parse->trailing_space && current_index < parse->count) {
+        prefix = parse->tokens[current_index];
+    }
+
+    if (current_index > 2 && shell_daq_option_takes_value(parse->tokens[current_index - 1])) {
+        if (strcmp(parse->tokens[current_index - 1], "--rate") == 0) {
+            return shell_complete_daq_kind(ctx,
+                                           SHELL_DAQ_COMPLETION_RATE,
+                                           prefix,
+                                           token_start,
+                                           show_matches);
+        }
+        return shell_complete_daq_kind(ctx,
+                                       SHELL_DAQ_COMPLETION_RATE_MS,
+                                       prefix,
+                                       token_start,
+                                       show_matches);
+    }
+
+    if (prefix[0] == '-') {
+        return shell_complete_daq_kind(ctx,
+                                       SHELL_DAQ_COMPLETION_OPTIONS,
+                                       prefix,
+                                       token_start,
+                                       show_matches);
+    }
+
+    shell_daq_completed_t completed;
+    shell_daq_analyze_completed(parse, current_index, &completed);
+
+    if (completed.positional_count == 0) {
+        if (shell_token_looks_like_path(prefix)) {
+            shell_complete_path(ctx, token_start, false);
+            return true;
+        }
+        return shell_complete_daq_kind(ctx,
+                                       completed.raw ?
+                                       SHELL_DAQ_COMPLETION_STREAMS_BYTES :
+                                       SHELL_DAQ_COMPLETION_STREAMS_ALL,
+                                       prefix,
+                                       token_start,
+                                       show_matches);
+    }
+
+    if (!completed.first_pos_is_stream) {
+        return shell_complete_daq_kind(ctx,
+                                       completed.raw ?
+                                       SHELL_DAQ_COMPLETION_STREAMS_BYTES :
+                                       SHELL_DAQ_COMPLETION_STREAMS_ALL,
+                                       prefix,
+                                       token_start,
+                                       show_matches);
+    }
+
+    if (completed.raw || completed.first_pos_type == SOLAR_OS_STREAM_TYPE_BYTES) {
+        if (completed.positional_count == 1) {
+            shell_complete_path(ctx, token_start, false);
+            return true;
+        }
+        return shell_complete_daq_kind(ctx,
+                                       SHELL_DAQ_COMPLETION_OPTIONS,
+                                       prefix,
+                                       token_start,
+                                       show_matches);
+    }
+
+    if (completed.stream_first_file_seen) {
+        return shell_complete_daq_kind(ctx,
+                                       SHELL_DAQ_COMPLETION_OPTIONS,
+                                       prefix,
+                                       token_start,
+                                       show_matches);
+    }
+
+    if (prefix[0] != '\0' &&
+        !shell_token_looks_like_path(prefix) &&
+        shell_daq_kind_has_match(ctx, SHELL_DAQ_COMPLETION_STREAMS_CSV, prefix)) {
+        return shell_complete_daq_kind(ctx,
+                                       SHELL_DAQ_COMPLETION_STREAMS_CSV,
+                                       prefix,
+                                       token_start,
+                                       show_matches);
+    }
+
+    shell_complete_path(ctx, token_start, false);
+    return true;
+}
+
+static bool shell_complete_daq_argument(solar_os_context_t *ctx,
+                                        const char *effective_command,
+                                        const shell_completion_parse_t *parse,
+                                        size_t current_index,
+                                        size_t token_start,
+                                        bool show_matches)
+{
+    const char *prefix = "";
+
+    if (strcmp(effective_command, "daq") != 0) {
+        return false;
+    }
+    if (!parse->trailing_space && current_index < parse->count) {
+        prefix = parse->tokens[current_index];
+    }
+
+    if (current_index == 1) {
+        return shell_complete_daq_kind(ctx,
+                                       SHELL_DAQ_COMPLETION_SUBCOMMANDS,
+                                       prefix,
+                                       token_start,
+                                       show_matches);
+    }
+
+    if (strcmp(parse->tokens[1], "start") == 0) {
+        return shell_complete_daq_start(ctx, parse, current_index, token_start, show_matches);
+    }
+
+    return true;
+}
+
 static bool shell_completion_collect_matches(solar_os_context_t *ctx,
                                              const char * const *tokens,
                                              size_t token_count,
@@ -2472,6 +2883,15 @@ static bool shell_complete_argument(solar_os_context_t *ctx,
 
     if (!parse->trailing_space && current_index < parse->count) {
         prefix = parse->tokens[current_index];
+    }
+
+    if (shell_complete_daq_argument(ctx,
+                                    effective_command,
+                                    parse,
+                                    current_index,
+                                    token_start,
+                                    show_matches)) {
+        return true;
     }
 
     const shell_completion_rule_t *path_rule =
@@ -3682,6 +4102,7 @@ static bool shell_execute_line(solar_os_context_t *ctx,
         if (argc >= 2 &&
             (strcmp(app->name, "edit") == 0 ||
              strcmp(app->name, "less") == 0 ||
+             strcmp(app->name, "notes") == 0 ||
              strcmp(app->name, "reader") == 0 ||
              strcmp(app->name, "sheet") == 0)) {
             if (!resolve_path_for_command(ctx, terminal(ctx),

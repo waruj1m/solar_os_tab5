@@ -39,9 +39,16 @@ set(SOLAR_OS_FLAVOR_INPUT "${SOLAR_OS_PROJECT_DIR}/flavors/${SOLAR_OS_FLAVOR}.to
 if(NOT EXISTS "${SOLAR_OS_FLAVOR_INPUT}")
     message(FATAL_ERROR "SolarOS flavor not found: ${SOLAR_OS_FLAVOR_INPUT}")
 endif()
+set(SOLAR_OS_GENERATED_FONT_SENTINEL
+    "${SOLAR_OS_PROJECT_DIR}/fonts/build/u8g2/u8g2_font_solar_os_default_r_14_tf.c"
+)
+if(NOT EXISTS "${SOLAR_OS_GENERATED_FONT_SENTINEL}")
+    message(FATAL_ERROR "SolarOS generated default fonts missing: ${SOLAR_OS_GENERATED_FONT_SENTINEL}. Run: make -C fonts/tools/bdfconv && python3 fonts/generate_u8g2_fonts.py")
+endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${SOLAR_OS_FLAVOR_INPUT}"
     "${SOLAR_OS_PROJECT_DIR}/scripts/generate_flavor_config.py"
+    "${SOLAR_OS_GENERATED_FONT_SENTINEL}"
 )
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -104,6 +111,7 @@ set(SOLAR_OS_SRCS
     "services/solar_os_ble_keyboard.c"
     "services/solar_os_cdc.c"
     "services/solar_os_clipboard.c"
+    "services/solar_os_doc.c"
     "services/solar_os_gfx.c"
     "services/solar_os_gpio.c"
     "services/solar_os_i2c.c"
@@ -119,9 +127,11 @@ set(SOLAR_OS_SRCS
     "services/solar_os_stream.c"
     "services/solar_os_terminal.c"
     "services/solar_os_time.c"
+    "services/solar_os_transfer.c"
     "services/solar_os_tui.c"
     "services/solar_os_uart.c"
     "services/solar_os_wifi.c"
+    "services/solar_os_zmodem.c"
 )
 
 set(SOLAR_OS_REQUIRES
@@ -208,8 +218,10 @@ if(SOLAR_OS_PACKAGE_UTILS)
     list(APPEND SOLAR_OS_SRCS
         "apps/solar_os_clock.c"
         "apps/solar_os_com.c"
+        "apps/solar_os_reader.c"
         "apps/solar_os_edit.c"
         "apps/solar_os_less.c"
+        "apps/solar_os_notes.c"
         "apps/solar_os_plot.c"
         "apps/solar_os_sheet.c"
     )
