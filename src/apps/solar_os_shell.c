@@ -444,10 +444,10 @@ static const char * const path_rm[] = {"rm"};
 static const char * const path_view[] = {"view"};
 #endif
 #if SOLAR_OS_PACKAGE_UTILS
-static const char * const path_docview[] = {"docview"};
 static const char * const path_notes[] = {"notes"};
 static const char * const path_plot[] = {"plot"};
 static const char * const path_plot_file[] = {"plot", "-f"};
+static const char * const path_reader[] = {"reader"};
 static const char * const path_plot_long_file[] = {"plot", "--file"};
 static const char * const path_plot_stream[] = {"plot", SHELL_COMPLETION_ANY};
 #endif
@@ -665,7 +665,6 @@ static const shell_completion_rule_t shell_completion_rules[] = {
     SHELL_COMPLETION_OPTIONS(path_view, view_options),
 #endif
 #if SOLAR_OS_PACKAGE_UTILS
-    SHELL_COMPLETION_PATH(path_docview, false),
     SHELL_COMPLETION_PATH(path_notes, false),
     SHELL_COMPLETION_OPTIONS(path_plot, plot_options),
     SHELL_COMPLETION_SCALAR_STREAMS(path_plot),
@@ -673,6 +672,7 @@ static const shell_completion_rule_t shell_completion_rules[] = {
     SHELL_COMPLETION_SCALAR_STREAMS(path_plot_stream),
     SHELL_COMPLETION_PATH(path_plot_file, false),
     SHELL_COMPLETION_PATH(path_plot_long_file, false),
+    SHELL_COMPLETION_PATH(path_reader, false),
 #endif
     SHELL_COMPLETION_STATIC(path_watch, watch_subcommands),
     SHELL_COMPLETION_COMMANDS(path_watch),
@@ -1966,7 +1966,6 @@ static bool shell_is_path_command(const char *command)
            strcmp(command, "arecord") == 0 ||
 #endif
 #if SOLAR_OS_PACKAGE_UTILS
-           strcmp(command, "docview") == 0 ||
            strcmp(command, "edit") == 0 ||
            strcmp(command, "less") == 0 ||
            strcmp(command, "reader") == 0 ||
@@ -4102,7 +4101,6 @@ static bool shell_execute_line(solar_os_context_t *ctx,
 
         if (argc >= 2 &&
             (strcmp(app->name, "edit") == 0 ||
-             strcmp(app->name, "docview") == 0 ||
              strcmp(app->name, "less") == 0 ||
              strcmp(app->name, "notes") == 0 ||
              strcmp(app->name, "reader") == 0 ||

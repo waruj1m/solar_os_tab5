@@ -52,7 +52,7 @@ Each flavor enables packages:
 - `games`: Built-in games.
 - `python`: MicroPython runtime. This currently also enables `net` because the Python module exposes network bindings.
 - `lua`: Lua runtime. This is independent of `python` and does not pull in `net`.
-- `utils`: Text editor, pagers, reader, document viewer, clock, and serial terminal app.
+- `utils`: Text editor, pager, reader, clock, and serial terminal app.
 
 Use `pkg` on the device to see the compiled flavor and package set. `version` also prints the active flavor.
 
@@ -335,9 +335,8 @@ Applications are launched by typing their name at the shell prompt.
 - `curl`: HTTP/HTTPS GET client with redirect support and optional SD card output.
 - `edit`: Text editor for SD card files with navigation, selection, copy/cut/paste, and PSRAM buffer storage.
 - `less`: Text file pager with wrapping and search.
-- `docview`: Graphics Markdown/text viewer using the shared retained document layout engine. Use `docview <file.md|file.txt>`; arrows scroll, page keys turn pages, and `+`/`-` adjusts zoom across 12/14/16/18/20 font sizes. `.txt` files use prose paragraph flow, while `.md`/`.markdown` files use Markdown parsing. Per-file position and zoom are saved in `/.docview/positions`.
+- `reader`: Graphics Markdown/text reader using the shared retained document layout engine. Use `reader <file.md|file.txt>`; arrows scroll, page keys turn pages, and `+`/`-` adjusts zoom across 12/14/16/18/20 font sizes. `.txt` files use prose paragraph flow, while `.md`/`.markdown` files use Markdown parsing. Per-file position and zoom are saved in `/.reader/positions`.
 - `notes`: Markdown checklist notes stored as `- [ ]` / `- [x]` items. Use `notes` for `/.notes/default.md` or `notes /notes/todo.md`; `Shift+Up`/`Shift+Down` reorders the selected item inside its active/done section.
-- `reader`: Text file pager that remembers per-file position and text size in `/.reader/positions`, reflows prose paragraphs across text sizes, and uses `Ctrl++` / `Ctrl-` to adjust reader text size.
 - `plot`: Graphics plotter for live scalar streams or DAQ CSV files. Use `plot temperature humidity battery --rate 1000`, `plot -f /logs/env.csv`, or `plot -f /logs/env.csv temperature humidity`; in live mode `+`/`-` adjusts the rolling time window.
 - `sheet`: CSV grid viewer with simple aggregate formulas such as `=SUM(column)`, `=AVG(column)`, `=MIN(column)`, `=MAX(column)`, `=COUNT(*)`, `=DELTA(column)`, and `=RATE(column)`.
 - `com`: Serial terminal for the exposed UART pins.
@@ -398,7 +397,7 @@ Current conventional files:
 - `/.shell/alias`: optional shell aliases in `<alias> <command-or-app> [fixed args...]` form.
 - `/.shell/user`: optional username for the shell prompt and SSH defaults.
 - `/.shell/hostname`: optional host name for the shell prompt and SSH key comments.
-- `/.reader/positions`: saved text reader offsets keyed by resolved file path.
+- `/.reader/positions`: saved graphics reader position and zoom keyed by resolved file path.
 - `/.ssh/known_hosts`: SSH host key database.
 - `/.ssh/hosts`: static host aliases, one `ip-address hostname` mapping per line.
 - `/.ssh/id_rsa` and `/.ssh/id_rsa.pub`: generated default SSH key pair.
@@ -423,7 +422,7 @@ The shell command parser currently lives in the shell app. Board and build confi
 
 The important rule is that drivers own hardware detail, services own policy, and apps and jobs use services. That lets shell commands, foreground applications, and background jobs share the same behavior for storage, terminal rendering, networking, identity, time, and input.
 
-Document-oriented apps use `services/solar_os_doc.c`, a PSRAM-first Markdown/plain-text document model with blocks, inline runs, source anchors, and retained graphics layout lines/runs. `docview` is the current graphics document app; ZIP, EPUB, RTF, and a future writer can build on the same service instead of each app inventing its own parser and layout path. The graphics font registry now has regular and bold faces across document sizes; italic font IDs exist in the API but currently fall back to the closest upright face until oblique U8g2 font arrays are added to the trimmed firmware set.
+Document-oriented apps use `services/solar_os_doc.c`, a PSRAM-first Markdown/plain-text document model with blocks, inline runs, source anchors, and retained graphics layout lines/runs. `reader` is the current graphics document app; ZIP, EPUB, RTF, and a future writer can build on the same service instead of each app inventing its own parser and layout path. The graphics font registry uses the generated default font family across document sizes, including regular, bold, italic, and bold-italic faces.
 
 SolarOS runtime roles:
 

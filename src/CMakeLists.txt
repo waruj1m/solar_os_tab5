@@ -197,7 +197,7 @@ if(SOLAR_OS_PACKAGE_UTILS)
     list(APPEND SOLAR_OS_SRCS
         "apps/solar_os_clock.c"
         "apps/solar_os_com.c"
-        "apps/solar_os_docview.c"
+        "apps/solar_os_reader.c"
         "apps/solar_os_edit.c"
         "apps/solar_os_less.c"
         "apps/solar_os_notes.c"
