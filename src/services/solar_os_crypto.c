@@ -4,6 +4,9 @@
 #include <string.h>
 
 #include "esp_random.h"
+#include "mbedtls/base64.h"
+#include "mbedtls/md.h"
+#include "mbedtls/pk.h"
 
 static int crypto_hex_value(char ch)
 {
@@ -85,6 +88,27 @@ esp_err_t solar_os_crypto_sha256_finish(solar_os_crypto_sha256_t *ctx,
     return ret == 0 ? ESP_OK : ESP_FAIL;
 }
 
+esp_err_t solar_os_crypto_sha256_once(const void *data,
+                                      size_t len,
+                                      uint8_t digest[SOLAR_OS_CRYPTO_SHA256_LEN])
+{
+    if ((data == NULL && len > 0) || digest == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    solar_os_crypto_sha256_t ctx;
+    solar_os_crypto_sha256_init(&ctx);
+    esp_err_t err = solar_os_crypto_sha256_start(&ctx);
+    if (err == ESP_OK) {
+        err = solar_os_crypto_sha256_update(&ctx, data, len);
+    }
+    if (err == ESP_OK) {
+        err = solar_os_crypto_sha256_finish(&ctx, digest);
+    }
+    solar_os_crypto_sha256_free(&ctx);
+    return err;
+}
+
 bool solar_os_crypto_sha256_hex_is_valid(const char *hex)
 {
     if (hex == NULL || strlen(hex) != SOLAR_OS_CRYPTO_SHA256_LEN * 2U) {
@@ -145,6 +169,76 @@ bool solar_os_crypto_sha256_matches_hex(const uint8_t digest[SOLAR_OS_CRYPTO_SHA
         return false;
     }
     return memcmp(digest, expected, sizeof(expected)) == 0;
+}
+
+esp_err_t solar_os_crypto_base64_decode(const char *text,
+                                        uint8_t *out,
+                                        size_t out_len,
+                                        size_t *actual_len)
+{
+    if (text == NULL || out == NULL || out_len == 0 || actual_len == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    size_t decoded_len = 0;
+    const int ret = mbedtls_base64_decode(out,
+                                          out_len,
+                                          &decoded_len,
+                                          (const unsigned char *)text,
+                                          strlen(text));
+    if (ret == MBEDTLS_ERR_BASE64_BUFFER_TOO_SMALL) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    if (ret != 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *actual_len = decoded_len;
+    return ESP_OK;
+}
+
+esp_err_t solar_os_crypto_ecdsa_p256_sha256_verify_pem(const char *public_key_pem,
+                                                       const void *data,
+                                                       size_t data_len,
+                                                       const uint8_t *signature_der,
+                                                       size_t signature_len)
+{
+    if (public_key_pem == NULL ||
+        (data == NULL && data_len > 0) ||
+        signature_der == NULL ||
+        signature_len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint8_t digest[SOLAR_OS_CRYPTO_SHA256_LEN];
+    esp_err_t err = solar_os_crypto_sha256_once(data, data_len, digest);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    mbedtls_pk_context key;
+    mbedtls_pk_init(&key);
+    const int parse_ret = mbedtls_pk_parse_public_key(&key,
+                                                      (const unsigned char *)public_key_pem,
+                                                      strlen(public_key_pem) + 1U);
+    if (parse_ret != 0) {
+        mbedtls_pk_free(&key);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!mbedtls_pk_can_do(&key, MBEDTLS_PK_ECDSA) || mbedtls_pk_get_bitlen(&key) != 256) {
+        mbedtls_pk_free(&key);
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    const int verify_ret = mbedtls_pk_verify(&key,
+                                             MBEDTLS_MD_SHA256,
+                                             digest,
+                                             sizeof(digest),
+                                             signature_der,
+                                             signature_len);
+    mbedtls_pk_free(&key);
+    return verify_ret == 0 ? ESP_OK : ESP_ERR_INVALID_CRC;
 }
 
 esp_err_t solar_os_crypto_random(uint8_t *out, size_t len)

@@ -15,6 +15,7 @@ extern "C" {
 
 #define SOLAR_OS_CRYPTO_SHA256_LEN 32
 #define SOLAR_OS_CRYPTO_SHA256_HEX_LEN 65
+#define SOLAR_OS_CRYPTO_ECDSA_P256_DER_SIGNATURE_MAX 96
 
 typedef struct {
     mbedtls_sha256_context ctx;
@@ -35,6 +36,9 @@ esp_err_t solar_os_crypto_sha256_update(solar_os_crypto_sha256_t *ctx,
                                         size_t len);
 esp_err_t solar_os_crypto_sha256_finish(solar_os_crypto_sha256_t *ctx,
                                         uint8_t digest[SOLAR_OS_CRYPTO_SHA256_LEN]);
+esp_err_t solar_os_crypto_sha256_once(const void *data,
+                                      size_t len,
+                                      uint8_t digest[SOLAR_OS_CRYPTO_SHA256_LEN]);
 
 bool solar_os_crypto_sha256_hex_is_valid(const char *hex);
 esp_err_t solar_os_crypto_bytes_to_hex(const uint8_t *bytes,
@@ -46,6 +50,15 @@ esp_err_t solar_os_crypto_hex_to_bytes(const char *hex,
                                        size_t bytes_len);
 bool solar_os_crypto_sha256_matches_hex(const uint8_t digest[SOLAR_OS_CRYPTO_SHA256_LEN],
                                         const char *hex);
+esp_err_t solar_os_crypto_base64_decode(const char *text,
+                                        uint8_t *out,
+                                        size_t out_len,
+                                        size_t *actual_len);
+esp_err_t solar_os_crypto_ecdsa_p256_sha256_verify_pem(const char *public_key_pem,
+                                                       const void *data,
+                                                       size_t data_len,
+                                                       const uint8_t *signature_der,
+                                                       size_t signature_len);
 
 esp_err_t solar_os_crypto_random(uint8_t *out, size_t len);
 esp_err_t solar_os_crypto_rng_init(solar_os_crypto_rng_t *rng, const char *personalization);

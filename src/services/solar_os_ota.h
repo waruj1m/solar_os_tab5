@@ -17,6 +17,7 @@
 #define SOLAR_OS_OTA_STATE_MAX 16
 #define SOLAR_OS_OTA_SHA256_MAX 65
 #define SOLAR_OS_OTA_INDEX_FILE "index.json"
+#define SOLAR_OS_OTA_INDEX_SIGNATURE_FILE "index.sig"
 #define SOLAR_OS_OTA_MANIFEST_FILE "manifest.json"
 #define SOLAR_OS_OTA_VERSION_FILE "version.txt"
 #define SOLAR_OS_OTA_FIRMWARE_FILE "firmware.bin"
@@ -58,6 +59,7 @@ typedef struct {
     char available_version[SOLAR_OS_OTA_VERSION_MAX];
     char board_id[SOLAR_OS_OTA_BOARD_MAX];
     char index_url[SOLAR_OS_OTA_ARTIFACT_URL_MAX];
+    char index_sig_url[SOLAR_OS_OTA_ARTIFACT_URL_MAX];
     char manifest_url[SOLAR_OS_OTA_ARTIFACT_URL_MAX];
     char firmware_url[SOLAR_OS_OTA_ARTIFACT_URL_MAX];
     char image_sha256[SOLAR_OS_OTA_SHA256_MAX];
@@ -65,6 +67,7 @@ typedef struct {
     int status_code;
     int64_t content_length;
     bool image_size_known;
+    bool index_signature_verified;
     bool update_available;
 } solar_os_ota_check_result_t;
 

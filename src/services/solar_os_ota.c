@@ -10,6 +10,7 @@
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_https_ota.h"
+#include "esp_timer.h"
 #include "solar_os_log.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
@@ -21,12 +22,15 @@
 #include "solar_os_config.h"
 #include "solar_os_crypto.h"
 #include "solar_os_json.h"
+#include "solar_os_ota_key.h"
 
 #define OTA_NVS_NAMESPACE "ota"
 #define OTA_NVS_URL_KEY "url"
 #define OTA_NVS_FLAVOR_KEY "flavor"
 #define OTA_HTTP_TIMEOUT_MS 15000
 #define OTA_INDEX_MAX 16384
+#define OTA_INDEX_SIGNATURE_MAX 512
+#define OTA_HTTP_FETCH_URL_MAX (SOLAR_OS_OTA_ARTIFACT_URL_MAX + 40)
 
 #ifndef SOLAR_OS_VERSION
 #define SOLAR_OS_VERSION "0.0.0"
@@ -55,6 +59,26 @@ typedef struct {
 } ota_firmware_verify_t;
 
 static void ota_load(void);
+static esp_err_t ota_join_url(const char *base_url,
+                              const char *path,
+                              char *out,
+                              size_t out_len);
+
+static esp_err_t ota_make_uncached_url(const char *url, char *out, size_t out_len)
+{
+    if (url == NULL || out == NULL || out_len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const char *separator = strchr(url, '?') != NULL ? "&" : "?";
+    const int written = snprintf(out,
+                                 out_len,
+                                 "%s%s_solaros=%" PRId64,
+                                 url,
+                                 separator,
+                                 (int64_t)esp_timer_get_time());
+    return written >= 0 && (size_t)written < out_len ? ESP_OK : ESP_ERR_INVALID_SIZE;
+}
 
 static void *ota_malloc(size_t size)
 {
@@ -157,6 +181,20 @@ static esp_err_t ota_url_directory(const char *url, char *out, size_t out_len)
     memcpy(out, url, len);
     out[len] = '\0';
     return ESP_OK;
+}
+
+static esp_err_t ota_build_index_signature_url(const char *index_url, char *out, size_t out_len)
+{
+    if (index_url == NULL || out == NULL || out_len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char base_url[SOLAR_OS_OTA_ARTIFACT_URL_MAX];
+    esp_err_t err = ota_url_directory(index_url, base_url, sizeof(base_url));
+    if (err != ESP_OK) {
+        return err;
+    }
+    return ota_join_url(base_url, SOLAR_OS_OTA_INDEX_SIGNATURE_FILE, out, out_len);
 }
 
 static bool ota_path_is_absolute_url(const char *path)
@@ -353,8 +391,14 @@ static esp_err_t ota_http_get_text(const char *url,
         *content_length = -1;
     }
 
+    char fetch_url[OTA_HTTP_FETCH_URL_MAX];
+    esp_err_t err = ota_make_uncached_url(url, fetch_url, sizeof(fetch_url));
+    if (err != ESP_OK) {
+        return err;
+    }
+
     esp_http_client_config_t config = {
-        .url = url,
+        .url = fetch_url,
         .method = HTTP_METHOD_GET,
         .timeout_ms = OTA_HTTP_TIMEOUT_MS,
         .event_handler = ota_http_event,
@@ -374,7 +418,10 @@ static esp_err_t ota_http_get_text(const char *url,
         return ESP_ERR_NO_MEM;
     }
 
-    const esp_err_t err = esp_http_client_perform(client);
+    (void)esp_http_client_set_header(client, "Cache-Control", "no-cache, no-store, max-age=0");
+    (void)esp_http_client_set_header(client, "Pragma", "no-cache");
+
+    err = esp_http_client_perform(client);
     const int http_status = esp_http_client_get_status_code(client);
     const int64_t http_len = esp_http_client_get_content_length(client);
     if (status_code != NULL) {
@@ -434,6 +481,41 @@ static esp_err_t ota_http_get_text_alloc(const char *url,
         *out_len = strlen(body);
     }
     *out_body = body;
+    return ESP_OK;
+}
+
+static esp_err_t ota_verify_index_signature(const char *index_body,
+                                            size_t index_len,
+                                            const char *signature_body,
+                                            size_t signature_len)
+{
+    if (index_body == NULL || index_len == 0 || signature_body == NULL ||
+        signature_len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint8_t signature_der[SOLAR_OS_CRYPTO_ECDSA_P256_DER_SIGNATURE_MAX];
+    size_t signature_der_len = 0;
+    esp_err_t err = solar_os_crypto_base64_decode(signature_body,
+                                                  signature_der,
+                                                  sizeof(signature_der),
+                                                  &signature_der_len);
+    if (err != ESP_OK) {
+        SOLAR_OS_LOGW(TAG, "index signature decode failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    err = solar_os_crypto_ecdsa_p256_sha256_verify_pem(SOLAR_OS_OTA_PUBLIC_KEY_PEM,
+                                                       index_body,
+                                                       index_len,
+                                                       signature_der,
+                                                       signature_der_len);
+    if (err != ESP_OK) {
+        SOLAR_OS_LOGW(TAG, "index signature verify failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    SOLAR_OS_LOGI(TAG, "index signature verified");
     return ESP_OK;
 }
 
@@ -646,6 +728,35 @@ static esp_err_t ota_resolve_artifact(solar_os_ota_check_result_t *result)
     if (err != ESP_OK) {
         return err;
     }
+
+    err = ota_build_index_signature_url(result->index_url,
+                                        result->index_sig_url,
+                                        sizeof(result->index_sig_url));
+    if (err != ESP_OK) {
+        ota_free(index_body);
+        return err;
+    }
+
+    char *signature_body = NULL;
+    size_t signature_len = 0;
+    err = ota_http_get_text_alloc(result->index_sig_url,
+                                  OTA_INDEX_SIGNATURE_MAX,
+                                  &signature_body,
+                                  &signature_len,
+                                  NULL,
+                                  NULL);
+    if (err == ESP_OK) {
+        err = ota_verify_index_signature(index_body,
+                                         index_len,
+                                         signature_body,
+                                         signature_len);
+    }
+    ota_free(signature_body);
+    if (err != ESP_OK) {
+        ota_free(index_body);
+        return err;
+    }
+    result->index_signature_verified = true;
 
     err = ota_parse_release_index(index_body, index_len, result);
     ota_free(index_body);

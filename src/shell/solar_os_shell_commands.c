@@ -507,6 +507,12 @@ static void ota_print_check_result(solar_os_shell_io_t *term,
                              result->target_flavor);
     solar_os_shell_io_printf(term, "board: %s\n", result->board_id);
     solar_os_shell_io_printf(term, "index URL: %s\n", result->index_url);
+    solar_os_shell_io_printf(term,
+                             "index signature: %s\n",
+                             result->index_signature_verified ? "verified" : "not verified");
+    if (result->index_sig_url[0] != '\0') {
+        solar_os_shell_io_printf(term, "index sig URL: %s\n", result->index_sig_url);
+    }
     solar_os_shell_io_printf(term, "manifest URL: %s\n", result->manifest_url);
     solar_os_shell_io_printf(term, "firmware URL: %s\n", result->firmware_url);
     if (result->image_size_known) {

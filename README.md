@@ -292,6 +292,7 @@ OTA artifacts use a board-aware and flavor-aware manifest layout. A release dire
 solaros/
   latest/
     index.json
+    index.sig
     waveshare_esp32_s3_rlcd_4_2/
       full/
         manifest.json
@@ -304,6 +305,7 @@ solaros/
         firmware.bin
   2.6.0/
     index.json
+    index.sig
     ...
 ```
 
@@ -316,9 +318,11 @@ ota check
 ota upgrade
 ```
 
-With the default OTA URL, every board/flavor target reads `https://hypergraph.cloud/solaros/latest/index.json`. `ota check` selects the artifact whose `board_id` matches the compiled board and whose `flavor` matches the OTA target flavor. It reports an update when either the artifact version differs or the target flavor differs from the currently running compiled flavor. `ota upgrade` hashes the received firmware stream and aborts before switching the boot partition if the digest does not match the selected artifact's `sha256`.
+With the default OTA URL, every board/flavor target reads `https://hypergraph.cloud/solaros/latest/index.json` and verifies the sibling `index.sig` before trusting artifact metadata. `index.sig` is a base64 DER ECDSA P-256/SHA-256 signature over the exact `index.json` bytes, checked against the public key embedded from `keys/ota_signing_public.pem`.
 
-The release schema is documented in [doc/solar_os_ota_schema.md](doc/solar_os_ota_schema.md), with JSON Schemas in [schemas/](schemas/). Deployment tooling should generate an `index.json` for release-wide board/flavor selection and a `manifest.json` next to each firmware image.
+`ota check` selects the artifact whose `board_id` matches the compiled board and whose `flavor` matches the OTA target flavor. It reports an update when either the artifact version differs or the target flavor differs from the currently running compiled flavor. `ota upgrade` hashes the received firmware stream and aborts before switching the boot partition if the digest does not match the selected artifact's `sha256`.
+
+The release schema is documented in [doc/solar_os_ota_schema.md](doc/solar_os_ota_schema.md), with JSON Schemas in [schemas/](schemas/). Deployment tooling should generate an `index.json` for release-wide board/flavor selection, sign it as `index.sig`, and place a `manifest.json` next to each firmware image.
 
 ## Built-In Jobs
 
