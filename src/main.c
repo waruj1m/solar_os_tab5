@@ -14,10 +14,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
-#include "solar_os_board_caps.h"
 #if SOLAR_OS_BOARD_HAS_DISPLAY
-#include "rlcd_st7305.h"
+#include "solar_os_board_display.h"
 #endif
+#include "solar_os_board_caps.h"
 #include "solar_os.h"
 #include "solar_os_adc.h"
 #include "solar_os_audio.h"
@@ -83,13 +83,12 @@
 static const char *TAG = "solar_os";
 
 #if SOLAR_OS_BOARD_HAS_DISPLAY
-static rlcd_st7305_t lcd;
+static solar_os_board_display_t board_display;
 #endif
 static solar_os_terminal_t *terminal;
 static solar_os_gfx_t gfx;
 static solar_os_context_t os_ctx;
 static const solar_os_app_t *foreground_app;
-static bool display_ready;
 static bool foreground_app_claimed;
 static volatile bool key_irq_pending;
 static bool key_interrupt_ready;
@@ -267,11 +266,11 @@ static void resume_display_after_sleep(uint32_t now_ms)
     (void)now_ms;
     return;
 #else
-    if (!display_ready) {
+    if (!solar_os_board_display_ready(&board_display)) {
         return;
     }
 
-    const esp_err_t err = rlcd_st7305_resume(&lcd);
+    const esp_err_t err = solar_os_board_display_resume(&board_display);
     if (err != ESP_OK) {
         SOLAR_OS_LOGW(TAG, "display resume failed: %s", esp_err_to_name(err));
         return;
@@ -1006,20 +1005,20 @@ void app_main(void)
 
     if (board_has(SOLAR_OS_BOARD_CAP_DISPLAY)) {
 #if SOLAR_OS_BOARD_HAS_DISPLAY
-        const esp_err_t display_err = rlcd_st7305_init(&lcd);
+        const esp_err_t display_err = solar_os_board_display_init(&board_display);
         if (display_err == ESP_OK) {
-            display_ready = true;
-            solar_os_gfx_init(&gfx, rlcd_st7305_get_u8g2(&lcd));
+            u8g2_t *display_u8g2 = solar_os_board_display_u8g2(&board_display);
+            solar_os_gfx_init(&gfx, display_u8g2);
             solar_os_splash_clear(&gfx);
 
             terminal = solar_os_psram_calloc(1, sizeof(*terminal));
             if (terminal != NULL) {
-                solar_os_terminal_init(terminal, rlcd_st7305_get_u8g2(&lcd));
+                solar_os_terminal_init(terminal, display_u8g2);
                 solar_os_context_init(&os_ctx, terminal, &gfx);
                 solar_os_splash_draw(&gfx, "starting services");
             } else {
                 ESP_LOGE(TAG, "Terminal allocation failed; continuing without display shell");
-                display_ready = false;
+                solar_os_board_display_deinit(&board_display);
             }
         } else {
             ESP_LOGE(TAG,

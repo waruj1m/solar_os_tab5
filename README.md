@@ -37,7 +37,7 @@ The SolarOS version is read from `version.txt` at build time.
 
 ## Board Targets
 
-The default PlatformIO environment is `waveshare_esp32_s3_rlcd_4_2`. CMake selects a SolarOS board profile from the PlatformIO environment name, or from `SOLAR_OS_BOARD` when the environment name is only an alias.
+The default PlatformIO environment is `waveshare_esp32_s3_rlcd_4_2`. Each PlatformIO environment should pass `-DSOLAR_OS_BOARD=<target>` so CMake selects the matching SolarOS board profile in `boards/`.
 
 To add a board target:
 
@@ -46,7 +46,7 @@ To add a board target:
 3. Add `include/boards/<target>.h` with the `SOLAR_OS_BOARD_*` pin and hardware metadata.
 4. Add `[env:<target>]` to `platformio.ini` and set `board = <target>`.
 
-For an alias environment, set `SOLAR_OS_BOARD=<target>` when building so CMake picks the right profile.
+See [Defining SolarOS Boards](doc/solar_os_boards.md) for the capability flags, display driver binding pattern, and validation checklist.
 
 ## Firmware Flavors
 

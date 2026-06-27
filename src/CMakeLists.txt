@@ -167,7 +167,22 @@ if(SOLAR_OS_BOARD_HAS_CDC)
     list(APPEND SOLAR_OS_SRCS "drivers/cdc_port.c")
 endif()
 if(SOLAR_OS_BOARD_HAS_DISPLAY)
-    list(APPEND SOLAR_OS_SRCS "drivers/rlcd_st7305.c")
+    if(NOT DEFINED SOLAR_OS_BOARD_DISPLAY_DRIVER OR
+            "${SOLAR_OS_BOARD_DISPLAY_DRIVER}" STREQUAL "")
+        message(FATAL_ERROR
+            "SolarOS board ${SOLAR_OS_BOARD_ID} enables DISPLAY without SOLAR_OS_BOARD_DISPLAY_DRIVER"
+        )
+    endif()
+    if("${SOLAR_OS_BOARD_DISPLAY_DRIVER}" STREQUAL "st7305")
+        list(APPEND SOLAR_OS_SRCS
+            "board/solar_os_board_display_st7305.c"
+            "drivers/rlcd_st7305.c"
+        )
+    else()
+        message(FATAL_ERROR
+            "Unsupported SolarOS display driver for ${SOLAR_OS_BOARD_ID}: ${SOLAR_OS_BOARD_DISPLAY_DRIVER}"
+        )
+    endif()
 endif()
 if(SOLAR_OS_BOARD_HAS_UART)
     list(APPEND SOLAR_OS_SRCS "drivers/uart_port.c")
@@ -307,7 +322,7 @@ set(SOLAR_OS_FLAVOR_STAMP
 
 idf_component_register(
     SRCS ${SOLAR_OS_SRCS}
-    INCLUDE_DIRS "." "apps" "drivers" "jobs" "services" "shell" "../include" "${SOLAR_OS_GENERATED_DIR}"
+    INCLUDE_DIRS "." "apps" "board" "drivers" "jobs" "services" "shell" "../include" "${SOLAR_OS_GENERATED_DIR}"
     REQUIRES ${SOLAR_OS_REQUIRES}
 )
 

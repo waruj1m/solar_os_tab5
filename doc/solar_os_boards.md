@@ -51,6 +51,7 @@ Full board example:
 set(SOLAR_OS_BOARD_ID "waveshare_esp32_s3_rlcd_4_2")
 set(SOLAR_OS_BOARD_NAME "Waveshare ESP32-S3-RLCD-4.2")
 set(SOLAR_OS_BOARD_DEFINE "SOLAR_OS_BOARD_WAVESHARE_ESP32_S3_RLCD_4_2")
+set(SOLAR_OS_BOARD_DISPLAY_DRIVER "st7305")
 
 set(SOLAR_OS_BOARD_HAS_DISPLAY ON)
 set(SOLAR_OS_BOARD_HAS_GFX ON)
@@ -74,6 +75,10 @@ set(SOLAR_OS_BOARD_HAS_HUMIDITY ON)
 Only enable a capability when the board header provides the required pin macros
 and the hardware has been checked. Unsupported services still compile, but their
 runtime calls return `ESP_ERR_NOT_SUPPORTED`.
+
+Some capabilities also need a concrete driver selection. For example, a board
+with `SOLAR_OS_BOARD_HAS_DISPLAY ON` must set `SOLAR_OS_BOARD_DISPLAY_DRIVER`.
+The current supported display driver value is `st7305`.
 
 ## Capability Flags
 
@@ -223,11 +228,19 @@ job, bridge jobs, or host-side tooling.
 ## Display Boards
 
 For a display board, enable both `DISPLAY` and `GFX` and provide the controller
-pin macros expected by the driver. The current built-in display driver is for
-the ST7305 reflective LCD:
+pin macros expected by the selected driver. The board profile selects the
+concrete driver:
+
+```cmake
+set(SOLAR_OS_BOARD_DISPLAY_DRIVER "st7305")
+set(SOLAR_OS_BOARD_HAS_DISPLAY ON)
+set(SOLAR_OS_BOARD_HAS_GFX ON)
+```
+
+The board header then provides metadata and pins. The current built-in display
+driver is for the ST7305 reflective LCD:
 
 ```c
-#define SOLAR_OS_BOARD_DISPLAY_DRIVER_ST7305 1
 #define SOLAR_OS_BOARD_DISPLAY_CONTROLLER "ST7305"
 #define SOLAR_OS_BOARD_DISPLAY_WIDTH 400
 #define SOLAR_OS_BOARD_DISPLAY_HEIGHT 300
@@ -241,7 +254,19 @@ the ST7305 reflective LCD:
 ```
 
 Different display controllers should get a separate driver and a board-specific
-driver flag instead of overloading the ST7305 macros.
+board display binding instead of overloading the ST7305 macros.
+
+The runtime path is:
+
+```text
+main.c
+  -> solar_os_board_display_*
+    -> board/solar_os_board_display_<driver>.c
+      -> drivers/<concrete_display_driver>.c
+```
+
+`main.c`, terminal, and graphics services should not include concrete display
+driver headers.
 
 ## Storage, I2C, Sensors, RTC, And Audio
 
