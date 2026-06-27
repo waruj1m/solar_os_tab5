@@ -140,6 +140,7 @@ static const shell_command_t shell_builtin_commands[] = {
     {"job", "control background jobs", solar_os_shell_cmd_job},
     {"version", "show SolarOS version", solar_os_shell_cmd_version},
     {"pkg", "show compiled packages", solar_os_shell_cmd_pkg},
+    {"board", "show board capabilities", solar_os_shell_cmd_board},
     {"clear", "clear the screen", solar_os_shell_cmd_clear},
     {"sleep", "enter light sleep", solar_os_shell_cmd_sleep},
     {"power", "power profile and sleep policy", solar_os_shell_cmd_power},

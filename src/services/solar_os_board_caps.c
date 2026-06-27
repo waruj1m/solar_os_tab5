@@ -1,0 +1,89 @@
+#include "solar_os_board_caps.h"
+
+#include <stdio.h>
+#include <string.h>
+
+typedef struct {
+    solar_os_board_capability_t capability;
+    const char *name;
+} board_capability_name_t;
+
+static const board_capability_name_t capability_names[] = {
+    {SOLAR_OS_BOARD_CAP_DISPLAY, "display"},
+    {SOLAR_OS_BOARD_CAP_GFX, "gfx"},
+    {SOLAR_OS_BOARD_CAP_CDC, "cdc"},
+    {SOLAR_OS_BOARD_CAP_UART, "uart"},
+    {SOLAR_OS_BOARD_CAP_SD, "sd"},
+    {SOLAR_OS_BOARD_CAP_I2C, "i2c"},
+    {SOLAR_OS_BOARD_CAP_RTC, "rtc"},
+    {SOLAR_OS_BOARD_CAP_BATTERY, "battery"},
+    {SOLAR_OS_BOARD_CAP_AUDIO, "audio"},
+    {SOLAR_OS_BOARD_CAP_WIFI, "wifi"},
+    {SOLAR_OS_BOARD_CAP_BLE, "ble"},
+    {SOLAR_OS_BOARD_CAP_GPIO, "gpio"},
+    {SOLAR_OS_BOARD_CAP_ADC, "adc"},
+    {SOLAR_OS_BOARD_CAP_PWM, "pwm"},
+    {SOLAR_OS_BOARD_CAP_KEY, "key"},
+    {SOLAR_OS_BOARD_CAP_TEMPERATURE, "temperature"},
+    {SOLAR_OS_BOARD_CAP_HUMIDITY, "humidity"},
+};
+
+solar_os_board_capabilities_t solar_os_board_capabilities(void)
+{
+    return (solar_os_board_capabilities_t)(SOLAR_OS_BOARD_CAPABILITIES);
+}
+
+bool solar_os_board_has(solar_os_board_capability_t capability)
+{
+    return (solar_os_board_capabilities() & (solar_os_board_capabilities_t)capability) != 0;
+}
+
+const char *solar_os_board_capability_name(solar_os_board_capability_t capability)
+{
+    for (size_t i = 0; i < sizeof(capability_names) / sizeof(capability_names[0]); i++) {
+        if (capability_names[i].capability == capability) {
+            return capability_names[i].name;
+        }
+    }
+    return "unknown";
+}
+
+void solar_os_board_capabilities_format(char *buffer, size_t buffer_len)
+{
+    if (buffer == NULL || buffer_len == 0) {
+        return;
+    }
+
+    buffer[0] = '\0';
+    size_t used = 0;
+    bool any = false;
+    const solar_os_board_capabilities_t caps = solar_os_board_capabilities();
+
+    for (size_t i = 0; i < sizeof(capability_names) / sizeof(capability_names[0]); i++) {
+        if ((caps & (solar_os_board_capabilities_t)capability_names[i].capability) == 0) {
+            continue;
+        }
+
+        const int written = snprintf(buffer + used,
+                                     buffer_len - used,
+                                     "%s%s",
+                                     any ? " " : "",
+                                     capability_names[i].name);
+        if (written < 0) {
+            buffer[used] = '\0';
+            return;
+        }
+
+        const size_t add = (size_t)written;
+        if (add >= buffer_len - used) {
+            buffer[buffer_len - 1] = '\0';
+            return;
+        }
+        used += add;
+        any = true;
+    }
+
+    if (!any) {
+        strlcpy(buffer, "none", buffer_len);
+    }
+}

@@ -27,6 +27,7 @@
 #include "solar_os_audio.h"
 #include "solar_os_battery.h"
 #include "solar_os_ble_keyboard.h"
+#include "solar_os_board_caps.h"
 #include "solar_os_config.h"
 #include "solar_os_daq_job.h"
 #include "solar_os_gpio.h"
@@ -96,6 +97,27 @@ static solar_os_shell_io_t *terminal(solar_os_context_t *ctx)
 static solar_os_terminal_t *display_terminal(solar_os_context_t *ctx)
 {
     return solar_os_context_terminal(ctx);
+}
+
+void solar_os_shell_cmd_board(solar_os_context_t *ctx, int argc, char **argv)
+{
+    solar_os_shell_io_t *term = terminal(ctx);
+    char caps[192];
+
+    (void)argv;
+
+    if (argc != 1) {
+        solar_os_shell_io_writeln(term, "usage: board");
+        return;
+    }
+
+    solar_os_board_capabilities_format(caps, sizeof(caps));
+    solar_os_shell_io_printf(term, "Board: %s\n", SOLAR_OS_BOARD_NAME);
+    solar_os_shell_io_printf(term, "ID: %s\n", SOLAR_OS_BOARD_ID);
+#ifdef SOLAR_OS_BOARD_MODULE_NAME
+    solar_os_shell_io_printf(term, "Module: %s\n", SOLAR_OS_BOARD_MODULE_NAME);
+#endif
+    solar_os_shell_io_printf(term, "Capabilities: %s\n", caps);
 }
 
 static void audio_print_gain(solar_os_shell_io_t *term, float gain_db);

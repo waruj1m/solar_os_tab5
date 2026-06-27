@@ -109,6 +109,7 @@ set(SOLAR_OS_SRCS
     "services/solar_os_audio.c"
     "services/solar_os_battery.c"
     "services/solar_os_ble_keyboard.c"
+    "services/solar_os_board_caps.c"
     "services/solar_os_cdc.c"
     "services/solar_os_clipboard.c"
     "services/solar_os_doc.c"
