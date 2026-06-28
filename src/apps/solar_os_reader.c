@@ -53,6 +53,7 @@ typedef struct {
     size_t epub_chapter;
     size_t epub_chapter_count;
     bool search_input;
+    bool search_status;
     char search[READER_SEARCH_MAX];
     size_t search_len;
     char last_search[READER_SEARCH_MAX];
@@ -307,6 +308,7 @@ static esp_err_t reader_load_epub_chapter(size_t chapter)
     reader.layout_valid = false;
     reader.content_height = 0;
     reader.match.valid = false;
+    reader.search_status = false;
     reader.message[0] = '\0';
     return ESP_OK;
 }
@@ -1150,6 +1152,7 @@ static bool reader_run_search(solar_os_context_t *ctx, bool forward, bool next)
 {
     if (reader.last_search_len == 0) {
         snprintf(reader.message, sizeof(reader.message), "no search");
+        reader.search_status = true;
         reader.match.valid = false;
         return false;
     }
@@ -1171,6 +1174,7 @@ static bool reader_run_search(solar_os_context_t *ctx, bool forward, bool next)
     bool wrapped = false;
     if (!reader_find_text(reader.last_search, reader.last_search_len, start_block, start_offset, forward, &wrapped)) {
         snprintf(reader.message, sizeof(reader.message), "not found: %s", reader.last_search);
+        reader.search_status = true;
         return false;
     }
 
@@ -1180,12 +1184,14 @@ static bool reader_run_search(solar_os_context_t *ctx, bool forward, bool next)
              "%s%s",
              wrapped ? "wrapped: " : "found: ",
              reader.last_search);
+    reader.search_status = true;
     return true;
 }
 
 static void reader_start_search(void)
 {
     reader.search_input = true;
+    reader.search_status = false;
     reader.search_len = 0;
     reader.search[0] = '\0';
     reader.message[0] = '\0';
@@ -1486,15 +1492,27 @@ static bool reader_handle_char(solar_os_context_t *ctx, char raw_ch)
         return reader_handle_search_input(ctx, ch);
     }
 
-    if (ch == SOLAR_OS_KEY_APP_EXIT || ch == SOLAR_OS_KEY_ESCAPE || ch == 'q' || ch == 'Q') {
+    if (ch == SOLAR_OS_KEY_APP_EXIT || ch == 'q' || ch == 'Q') {
         solar_os_context_request_exit(ctx);
         return true;
     }
     if (reader.error_only) {
+        if (ch == SOLAR_OS_KEY_ESCAPE) {
+            solar_os_context_request_exit(ctx);
+        }
         return true;
     }
 
     switch (ch) {
+    case SOLAR_OS_KEY_ESCAPE:
+        if (reader.match.valid || reader.search_status) {
+            reader.match.valid = false;
+            reader.search_status = false;
+            reader.message[0] = '\0';
+        } else {
+            solar_os_context_request_exit(ctx);
+        }
+        break;
     case SOLAR_OS_KEY_UP:
         reader_scroll_lines(ctx, -1);
         break;

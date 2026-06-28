@@ -4729,12 +4729,10 @@ static void ping_print_usage(solar_os_shell_io_t *term)
     solar_os_shell_io_writeln(term, "usage: ping <host> [count]");
     solar_os_shell_io_printf(term,
                              "%s stops a running ping\n",
-                             solar_os_shell_io_kind(term) == SOLAR_OS_SHELL_IO_KIND_PORT ?
-                                 "ESC or Ctrl+]" :
-                                 "ESC");
+                             solar_os_shell_io_app_exit_key(term));
 }
 
-static bool shell_read_escape_key(void *user)
+static bool shell_read_app_exit_key(void *user)
 {
     solar_os_shell_io_t *term = (solar_os_shell_io_t *)user;
     char chars[8];
@@ -4743,7 +4741,7 @@ static bool shell_read_escape_key(void *user)
     while ((count = solar_os_ble_keyboard_read_chars(chars, sizeof(chars))) > 0) {
         for (size_t i = 0; i < count; i++) {
             const uint8_t ch = (uint8_t)chars[i];
-            if (ch == SOLAR_OS_KEY_ESCAPE || ch == SOLAR_OS_KEY_APP_EXIT) {
+            if (ch == SOLAR_OS_KEY_APP_EXIT) {
                 return true;
             }
         }
@@ -4767,8 +4765,7 @@ static bool shell_read_escape_key(void *user)
             return false;
         }
         for (size_t i = 0; i < count; i++) {
-            if (port_chars[i] == SOLAR_OS_KEY_ESCAPE ||
-                port_chars[i] == 0x1d ||
+            if (port_chars[i] == 0x1d ||
                 port_chars[i] == SOLAR_OS_KEY_APP_EXIT) {
                 return true;
             }
@@ -4831,9 +4828,7 @@ void solar_os_shell_cmd_ping(solar_os_context_t *ctx, int argc, char **argv)
         solar_os_shell_io_printf(term,
                                  "ping %s, %s to stop\n",
                                  host,
-                                 solar_os_shell_io_kind(term) == SOLAR_OS_SHELL_IO_KIND_PORT ?
-                                     "ESC/Ctrl+]" :
-                                     "ESC");
+                                 solar_os_shell_io_app_exit_key(term));
     } else {
         solar_os_shell_io_printf(term, "ping %s (%u packets)\n", host, (unsigned)count);
     }
@@ -4843,7 +4838,7 @@ void solar_os_shell_cmd_ping(solar_os_context_t *ctx, int argc, char **argv)
                                             &options,
                                             ping_print_event,
                                             term,
-                                            shell_read_escape_key,
+                                            shell_read_app_exit_key,
                                             term,
                                             &result);
     if (err == ESP_ERR_INVALID_STATE) {
@@ -4887,7 +4882,7 @@ static void netscan_print_usage(solar_os_shell_io_t *term)
     solar_os_shell_io_writeln(term, "  target: host, 192.168.1.20, 192.168.1.1-32, 192.168.1.0/24");
     solar_os_shell_io_writeln(term, "  ports: 22,80,443 or 1-128");
     solar_os_shell_io_writeln(term, "  default: 22,80,443,1883,8080");
-    solar_os_shell_io_writeln(term, "ESC stops a running scan");
+    solar_os_shell_io_printf(term, "%s stops a running scan\n", solar_os_shell_io_app_exit_key(term));
 }
 
 typedef struct {
@@ -5361,9 +5356,7 @@ void solar_os_shell_cmd_netscan(solar_os_context_t *ctx, int argc, char **argv)
                              (unsigned)target.count,
                              target.count == 1 ? "" : "s",
                              (unsigned)port_count,
-                             solar_os_shell_io_kind(term) == SOLAR_OS_SHELL_IO_KIND_PORT ?
-                                 "ESC/Ctrl+]" :
-                                 "ESC");
+                             solar_os_shell_io_app_exit_key(term));
     solar_os_shell_io_writeln(term, "HOST             PORT     STATE  SERVICE");
     solar_os_shell_io_flush(term);
 
@@ -5379,7 +5372,7 @@ void solar_os_shell_cmd_netscan(solar_os_context_t *ctx, int argc, char **argv)
         netscan_target_ip(&target, host_index, ip, sizeof(ip));
 
         for (size_t port_index = 0; port_index < port_count; port_index++) {
-            if (shell_read_escape_key(term)) {
+            if (shell_read_app_exit_key(term)) {
                 stopped = true;
                 break;
             }
@@ -5472,8 +5465,7 @@ static bool mqtt_read_stop_key(void)
 
     while ((count = solar_os_ble_keyboard_read_chars(chars, sizeof(chars))) > 0) {
         for (size_t i = 0; i < count; i++) {
-            if (chars[i] == SOLAR_OS_KEY_ESCAPE ||
-                chars[i] == SOLAR_OS_KEY_APP_EXIT ||
+            if ((uint8_t)chars[i] == SOLAR_OS_KEY_APP_EXIT ||
                 chars[i] == 'q') {
                 return true;
             }
@@ -5640,10 +5632,11 @@ static void mqtt_cmd_subscribe(solar_os_shell_io_t *term, int argc, char **argv)
     }
 
     solar_os_shell_io_printf(term,
-                             "mqtt subscribe: %s qos %d msg %d, ESC/q to stop display\n",
+                             "mqtt subscribe: %s qos %d msg %d, %s/q to stop display\n",
                              argv[2],
                              qos,
-                             msg_id);
+                             msg_id,
+                             solar_os_shell_io_app_exit_key(term));
     solar_os_shell_io_flush(term);
 
     bool stopped = false;

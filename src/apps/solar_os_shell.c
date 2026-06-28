@@ -1771,7 +1771,7 @@ static void shell_watch_refresh(solar_os_context_t *ctx)
                                   shell_session(ctx)->watch_interval_ms / 1000U,
                                   shell_session(ctx)->watch_command);
     solar_os_shell_io_printf(term,
-                             "%s, ESC, or q exits\n",
+                             "%s or q exits\n",
                              solar_os_shell_io_app_exit_key(term));
     solar_os_shell_io_put_char(term, '\n');
 
@@ -1903,7 +1903,7 @@ esp_err_t solar_os_shell_session_start_log_follow(solar_os_context_t *ctx,
     solar_os_shell_io_printf_bold(term, "Following SolarOS logs: %s\n",
                                   solar_os_log_level_name(level));
     solar_os_shell_io_printf(term,
-                             "%s, ESC, Ctrl+C, or q exits\n",
+                             "%s, Ctrl+C, or q exits\n",
                              solar_os_shell_io_app_exit_key(term));
     solar_os_shell_io_put_char(term, '\n');
     solar_os_shell_io_flush(term);
@@ -4749,7 +4749,6 @@ static bool shell_handle_watch_event(solar_os_context_t *ctx, const solar_os_eve
     if (event->type == SOLAR_OS_EVENT_CHAR) {
         const uint8_t ch = (uint8_t)event->data.ch;
         if (ch == SOLAR_OS_KEY_APP_EXIT ||
-            ch == SOLAR_OS_KEY_ESCAPE ||
             ch == 'q' ||
             ch == 'Q') {
             shell_watch_stop(ctx);
@@ -4778,7 +4777,6 @@ static bool shell_handle_log_follow_event(solar_os_context_t *ctx, const solar_o
     if (event->type == SOLAR_OS_EVENT_CHAR) {
         const uint8_t ch = (uint8_t)event->data.ch;
         if (ch == SOLAR_OS_KEY_APP_EXIT ||
-            ch == SOLAR_OS_KEY_ESCAPE ||
             ch == 0x03 ||
             ch == 'q' ||
             ch == 'Q') {
