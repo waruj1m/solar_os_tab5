@@ -13,6 +13,7 @@
 #include "solar_os_clipboard.h"
 #include "solar_os_shell_io.h"
 #include "solar_os_storage.h"
+#include "solar_os_syntax.h"
 #include "solar_os_terminal.h"
 
 #define EDITOR_BUFFER_CAPACITY (256 * 1024)
@@ -32,10 +33,18 @@ typedef struct {
     bool selection_active;
     bool saved_text_size_valid;
     solar_os_terminal_text_size_t saved_text_size;
+    solar_os_syntax_language_t syntax;
     char path[SOLAR_OS_STORAGE_PATH_MAX];
     char display_name[SOLAR_OS_STORAGE_PATH_MAX];
     char message[72];
 } editor_state_t;
+
+typedef struct {
+    bool bold;
+    bool italic;
+    bool underline;
+    bool inverse;
+} editor_attrs_t;
 
 static editor_state_t editor;
 static solar_os_shell_io_t editor_fallback_io;
@@ -275,6 +284,71 @@ static void editor_write_clipped(solar_os_shell_io_t *io,
     }
 }
 
+static void editor_apply_style(solar_os_shell_io_t *io,
+                               editor_attrs_t *attrs,
+                               solar_os_syntax_style_t style,
+                               bool inverse)
+{
+    const bool bold = style == SOLAR_OS_SYNTAX_STYLE_KEYWORD;
+    const bool underline = style == SOLAR_OS_SYNTAX_STYLE_COMMENT;
+    const bool italic = style == SOLAR_OS_SYNTAX_STYLE_STRING ||
+        style == SOLAR_OS_SYNTAX_STYLE_NUMBER;
+
+    if (attrs == NULL || attrs->bold != bold) {
+        (void)solar_os_shell_io_set_bold(io, bold);
+        if (attrs != NULL) {
+            attrs->bold = bold;
+        }
+    }
+    if (attrs == NULL || attrs->underline != underline) {
+        (void)solar_os_shell_io_set_underline(io, underline);
+        if (attrs != NULL) {
+            attrs->underline = underline;
+        }
+    }
+    if (attrs == NULL || attrs->italic != italic) {
+        (void)solar_os_shell_io_set_italic(io, italic);
+        if (attrs != NULL) {
+            attrs->italic = italic;
+        }
+    }
+    if (attrs == NULL || attrs->inverse != inverse) {
+        (void)solar_os_shell_io_set_inverse(io, inverse);
+        if (attrs != NULL) {
+            attrs->inverse = inverse;
+        }
+    }
+}
+
+static void editor_reset_style(solar_os_shell_io_t *io)
+{
+    (void)solar_os_shell_io_set_bold(io, false);
+    (void)solar_os_shell_io_set_underline(io, false);
+    (void)solar_os_shell_io_set_italic(io, false);
+    (void)solar_os_shell_io_set_inverse(io, false);
+}
+
+static void editor_prepare_syntax_state(solar_os_syntax_state_t *state, size_t first_line)
+{
+    solar_os_syntax_state_init(state);
+    if (state == NULL || editor.syntax == SOLAR_OS_SYNTAX_NONE || first_line == 0) {
+        return;
+    }
+
+    size_t start = 0;
+    for (size_t line = 0; line < first_line && start < editor.len; line++) {
+        const size_t end = editor_line_end_for(start);
+        solar_os_syntax_highlight_line(editor.syntax,
+                                       state,
+                                       &editor.buffer[start],
+                                       end - start,
+                                       0,
+                                       NULL,
+                                       0);
+        start = end < editor.len ? end + 1 : editor.len;
+    }
+}
+
 static void editor_ensure_cursor_visible(solar_os_shell_io_t *io)
 {
     const size_t rows = solar_os_shell_io_rows(io);
@@ -316,6 +390,8 @@ static void editor_render(solar_os_context_t *ctx)
     const size_t text_rows = rows > 1 ? rows - 1 : 1;
     const size_t cursor_line = editor_line_for_index(editor.cursor);
     const size_t cursor_col = editor_cursor_col();
+    solar_os_syntax_state_t syntax_state;
+    editor_attrs_t attrs = {0};
     size_t selection_start = 0;
     size_t selection_end = 0;
     const bool has_selection = editor_has_selection();
@@ -354,17 +430,21 @@ static void editor_render(solar_os_context_t *ctx)
 
     solar_os_shell_io_set_cursor(io, 0, 0);
     editor_write_clipped(io, header, cols, true);
+    editor_reset_style(io);
+    editor_prepare_syntax_state(&syntax_state, editor.top_line);
 
     for (size_t row = 0; row < text_rows; row++) {
         const size_t line_index = editor.top_line + row;
         const size_t start = editor_index_for_line(line_index);
         const size_t end = editor_line_end_for(start);
         char line[SOLAR_OS_TERMINAL_MAX_COLS];
+        uint8_t styles[SOLAR_OS_TERMINAL_MAX_COLS];
+        size_t line_len = 0;
         size_t visible_start = start + editor.left_col;
         size_t copy_len = 0;
 
         if (start < editor.len || line_index == 0) {
-            const size_t line_len = end >= start ? end - start : 0;
+            line_len = end >= start ? end - start : 0;
             if (editor.left_col < line_len) {
                 copy_len = line_len - editor.left_col;
                 if (copy_len > cols) {
@@ -377,16 +457,30 @@ static void editor_render(solar_os_context_t *ctx)
                 memcpy(line, &editor.buffer[visible_start], copy_len);
             }
         }
+        if (editor.syntax != SOLAR_OS_SYNTAX_NONE && (start < editor.len || line_index == 0)) {
+            solar_os_syntax_highlight_line(editor.syntax,
+                                           &syntax_state,
+                                           &editor.buffer[start],
+                                           line_len,
+                                           editor.left_col,
+                                           styles,
+                                           copy_len);
+        } else if (copy_len > 0) {
+            memset(styles, SOLAR_OS_SYNTAX_STYLE_NORMAL, copy_len);
+        }
 
         solar_os_shell_io_set_cursor(io, row + 1, 0);
         for (size_t col = 0; col < copy_len; col++) {
             const size_t index = visible_start + col;
             const bool selected = has_selection && index >= selection_start && index < selection_end;
-            solar_os_shell_io_set_inverse(io, selected);
+            const solar_os_syntax_style_t style = (solar_os_syntax_style_t)styles[col];
+            editor_apply_style(io, &attrs, style, selected);
             solar_os_shell_io_put_char(io, editor_is_printable(line[col]) ? line[col] : '.');
         }
-        solar_os_shell_io_set_inverse(io, false);
+        editor_reset_style(io);
+        memset(&attrs, 0, sizeof(attrs));
     }
+    editor_reset_style(io);
 
     if (rows > 1 &&
         cursor_line >= editor.top_line &&
@@ -865,6 +959,7 @@ static esp_err_t edit_start(solar_os_context_t *ctx)
         return ESP_OK;
     }
     strlcpy(editor.display_name, arg != NULL ? arg : editor.path, sizeof(editor.display_name));
+    editor.syntax = solar_os_syntax_language_for_path(editor.path);
 
     const esp_err_t err = editor_open_file();
     if (err != ESP_OK) {
