@@ -1,4 +1,5 @@
 #include "solar_os_shell_commands.h"
+#include "solar_os_shell_common.h"
 #include "solar_os_shell_io.h"
 
 #include <ctype.h>
@@ -29,14 +30,12 @@
 #include "solar_os_ble_keyboard.h"
 #include "solar_os_board_caps.h"
 #include "solar_os_config.h"
-#include "solar_os_daq_job.h"
 #include "solar_os_gpio.h"
 #include "solar_os_i2c.h"
 #include "solar_os_identity.h"
 #include "solar_os_jobs.h"
 #include "solar_os_log.h"
 #if SOLAR_OS_PACKAGE_NET
-#include "solar_os_mqtt.h"
 #include "solar_os_net.h"
 #endif
 #include "solar_os_ota.h"
@@ -82,23 +81,14 @@
 #define SOLAR_OS_VERSION "0.0.0"
 #endif
 
-static solar_os_shell_io_t shell_command_fallback_io;
-
 static solar_os_shell_io_t *terminal(solar_os_context_t *ctx)
 {
-    solar_os_shell_io_t *io = solar_os_context_shell_io(ctx);
-    if (io == NULL || solar_os_shell_io_kind(io) == SOLAR_OS_SHELL_IO_KIND_NONE) {
-        solar_os_shell_io_init_terminal(&shell_command_fallback_io,
-                                        solar_os_context_terminal(ctx));
-        solar_os_context_set_shell_io(ctx, &shell_command_fallback_io);
-        io = &shell_command_fallback_io;
-    }
-    return io;
+    return solar_os_shell_command_io(ctx);
 }
 
 static solar_os_terminal_t *display_terminal(solar_os_context_t *ctx)
 {
-    return solar_os_context_terminal(ctx);
+    return solar_os_shell_display_terminal(ctx);
 }
 
 static bool shell_print_not_supported(solar_os_shell_io_t *term,
@@ -106,15 +96,17 @@ static bool shell_print_not_supported(solar_os_shell_io_t *term,
                                       const char *feature,
                                       esp_err_t err)
 {
-    if (err != ESP_ERR_NOT_SUPPORTED) {
-        return false;
-    }
+    return solar_os_shell_print_not_supported(term, command, feature, err);
+}
 
-    solar_os_shell_io_printf(term,
-                             "%s: %s not available on this board\n",
-                             command,
-                             feature);
-    return true;
+static bool parse_u8(const char *text, uint8_t *value)
+{
+    return solar_os_shell_parse_u8(text, value);
+}
+
+static bool parse_size_arg(const char *text, size_t min, size_t max, size_t *value)
+{
+    return solar_os_shell_parse_size_arg(text, min, max, value);
 }
 
 void solar_os_shell_cmd_board(solar_os_context_t *ctx, int argc, char **argv)
@@ -149,40 +141,6 @@ void solar_os_shell_cmd_board(solar_os_context_t *ctx, int argc, char **argv)
 }
 
 static void audio_print_gain(solar_os_shell_io_t *term, float gain_db);
-
-static bool parse_u8(const char *text, uint8_t *value)
-{
-    if (text == NULL || text[0] == '\0') {
-        return false;
-    }
-
-    char *end = NULL;
-    errno = 0;
-    unsigned long parsed = strtoul(text, &end, 0);
-    if (errno != 0 || end == text || *end != '\0' || parsed > 0xff) {
-        return false;
-    }
-
-    *value = (uint8_t)parsed;
-    return true;
-}
-
-static bool parse_size_arg(const char *text, size_t min, size_t max, size_t *value)
-{
-    if (text == NULL || text[0] == '\0') {
-        return false;
-    }
-
-    char *end = NULL;
-    errno = 0;
-    unsigned long parsed = strtoul(text, &end, 0);
-    if (errno != 0 || end == text || *end != '\0' || parsed < min || parsed > max) {
-        return false;
-    }
-
-    *value = (size_t)parsed;
-    return true;
-}
 
 static bool parse_date_arg(const char *text, solar_os_datetime_t *datetime)
 {
@@ -2445,153 +2403,6 @@ void solar_os_shell_cmd_stream(solar_os_context_t *ctx, int argc, char **argv)
     }
 
     stream_print_usage(term);
-}
-
-static void daq_print_usage(solar_os_shell_io_t *term)
-{
-    solar_os_shell_io_writeln(term, "usage:");
-    solar_os_shell_io_writeln(term, "  daq help");
-    solar_os_shell_io_writeln(term, "  daq status");
-    solar_os_shell_io_writeln(term, "  daq streams");
-    solar_os_shell_io_writeln(term, "  daq start <file.csv> <stream...> [--rate seconds|--rate-ms ms]");
-    solar_os_shell_io_writeln(term, "  daq start <stream...> <file.csv> [--rate seconds|--rate-ms ms]");
-    solar_os_shell_io_writeln(term, "  daq start <file.csv> <stream> --changes [--append|--replace]");
-    solar_os_shell_io_writeln(term, "  daq start <file.bin> <byte-stream> --raw [--rate-ms ms]");
-    solar_os_shell_io_writeln(term, "  daq stop");
-    solar_os_shell_io_writeln(term, "");
-    solar_os_shell_io_writeln(term, "examples:");
-    solar_os_shell_io_writeln(term, "  daq start /logs/env.csv temperature humidity battery --rate 60");
-    solar_os_shell_io_writeln(term, "  daq start /logs/key.csv gpio17 --changes");
-    solar_os_shell_io_writeln(term, "  daq start /logs/uart0.bin uart0 --raw --rate-ms 25");
-}
-
-static void daq_print_status(solar_os_shell_io_t *term)
-{
-    solar_os_daq_status_t status;
-    solar_os_daq_job_get_status(&status);
-
-    if (!status.running) {
-        solar_os_shell_io_printf(term,
-                                 "DAQ: stopped%s%s\n",
-                                 status.last_error == ESP_OK ? "" : ", last error ",
-                                 status.last_error == ESP_OK ? "" : esp_err_to_name(status.last_error));
-        return;
-    }
-
-    solar_os_shell_io_printf(term, "DAQ: running %s -> %s\n", status.stream_ids, status.path);
-    solar_os_shell_io_printf(term,
-                             "Streams: %u, type %s, mode %s, interval %" PRIu32 " ms, %s, %s\n",
-                             (unsigned)status.stream_count,
-                             solar_os_stream_type_name(status.stream_type),
-                             status.raw ? "raw" : "csv",
-                             status.interval_ms,
-                             status.change_only ? "changes" : "samples",
-                             status.append ? "append" : "replace");
-    if (status.raw) {
-        solar_os_shell_io_printf(term,
-                                 "Chunks: written %" PRIu32 ", bytes %" PRIu64
-                                 ", skipped %" PRIu32 ", failed %" PRIu32 "\n",
-                                 status.written_records,
-                                 status.written_bytes,
-                                 status.skipped_records,
-                                 status.failed_records);
-    } else {
-        solar_os_shell_io_printf(term,
-                                 "Records: written %" PRIu32
-                                 ", skipped %" PRIu32 ", failed %" PRIu32 "\n",
-                                 status.written_records,
-                                 status.skipped_records,
-                                 status.failed_records);
-    }
-    if (status.last_error != ESP_OK) {
-        solar_os_shell_io_printf(term, "Last error: %s\n", esp_err_to_name(status.last_error));
-    }
-}
-
-static void daq_print_start_error(solar_os_shell_io_t *term, const char *stream_id, esp_err_t err)
-{
-    if (err == ESP_ERR_NOT_FOUND) {
-        solar_os_shell_io_printf(term, "daq: stream not found: %s\n", stream_id);
-        return;
-    }
-    if (err == ESP_ERR_INVALID_STATE && stream_id != NULL) {
-        solar_os_stream_info_t stream;
-        solar_os_port_info_t port;
-        if (solar_os_stream_get_info(stream_id, &stream) == ESP_OK &&
-            stream.type == SOLAR_OS_STREAM_TYPE_BYTES &&
-            solar_os_port_get_info(stream.id, &port) == ESP_OK &&
-            port.claimed) {
-            solar_os_shell_io_printf(term, "daq: %s is owned by %s\n", stream.id, port.owner);
-            return;
-        }
-    }
-    if (err == ESP_ERR_INVALID_ARG) {
-        daq_print_usage(term);
-        return;
-    }
-    if (err == ESP_ERR_NOT_SUPPORTED) {
-        solar_os_shell_io_writeln(term, "daq: unsupported stream/mode combination");
-        return;
-    }
-
-    solar_os_shell_io_printf(term, "daq start failed: %s\n", esp_err_to_name(err));
-}
-
-void solar_os_shell_cmd_daq(solar_os_context_t *ctx, int argc, char **argv)
-{
-    solar_os_shell_io_t *term = terminal(ctx);
-
-    if (argc == 1 || (argc == 2 && strcmp(argv[1], "help") == 0)) {
-        daq_print_usage(term);
-        return;
-    }
-
-    if (argc == 2 && strcmp(argv[1], "status") == 0) {
-        daq_print_status(term);
-        return;
-    }
-
-    if (argc == 2 && strcmp(argv[1], "streams") == 0) {
-        stream_print_list(term);
-        return;
-    }
-
-    if (strcmp(argv[1], "stop") == 0) {
-        if (argc != 2) {
-            solar_os_shell_io_writeln(term, "usage: daq stop");
-            return;
-        }
-        const esp_err_t err = solar_os_jobs_stop(ctx, "daq");
-        if (err == ESP_OK) {
-            solar_os_shell_io_writeln(term, "daq: stopped");
-        } else {
-            solar_os_shell_io_printf(term, "daq stop failed: %s\n", esp_err_to_name(err));
-        }
-        return;
-    }
-
-    if (strcmp(argv[1], "start") == 0) {
-        if (argc < 4 || argc > SOLAR_OS_APP_ARG_MAX + 1) {
-            daq_print_usage(term);
-            return;
-        }
-
-        char *job_argv[SOLAR_OS_APP_ARG_MAX];
-        job_argv[0] = "daq";
-        for (int i = 2; i < argc; i++) {
-            job_argv[i - 1] = argv[i];
-        }
-
-        const esp_err_t err = solar_os_jobs_start(ctx, "daq", argc - 1, job_argv);
-        if (err == ESP_OK) {
-            solar_os_shell_io_writeln(term, "daq: started");
-        } else {
-            daq_print_start_error(term, argv[2], err);
-        }
-        return;
-    }
-
-    daq_print_usage(term);
 }
 
 void solar_os_shell_cmd_df(solar_os_context_t *ctx, int argc, char **argv)
@@ -5413,286 +5224,6 @@ void solar_os_shell_cmd_netscan(solar_os_context_t *ctx, int argc, char **argv)
                              (unsigned)open_count,
                              (unsigned)probe_count);
     solar_os_shell_io_set_cursor_visible(term, cursor_was_visible);
-}
-
-static void mqtt_print_usage(solar_os_shell_io_t *term)
-{
-    solar_os_shell_io_writeln(term, "usage:");
-    solar_os_shell_io_writeln(term, "  mqtt status");
-    solar_os_shell_io_writeln(term, "  mqtt connect [mqtt[s]://host[:port] [username [password]]]");
-    solar_os_shell_io_writeln(term, "  mqtt disconnect");
-    solar_os_shell_io_writeln(term, "  mqtt publish <topic> <payload> [qos] [retain]");
-    solar_os_shell_io_writeln(term, "  mqtt subscribe <topic> [qos]");
-}
-
-static bool mqtt_parse_qos(const char *text, int *qos)
-{
-    size_t value = 0;
-
-    if (qos == NULL || !parse_size_arg(text, 0, 2, &value)) {
-        return false;
-    }
-
-    *qos = (int)value;
-    return true;
-}
-
-static bool mqtt_parse_retain(const char *text, bool *retain)
-{
-    if (text == NULL || retain == NULL) {
-        return false;
-    }
-    if (strcmp(text, "1") == 0 ||
-        strcmp(text, "true") == 0 ||
-        strcmp(text, "on") == 0 ||
-        strcmp(text, "retain") == 0) {
-        *retain = true;
-        return true;
-    }
-    if (strcmp(text, "0") == 0 ||
-        strcmp(text, "false") == 0 ||
-        strcmp(text, "off") == 0) {
-        *retain = false;
-        return true;
-    }
-    return false;
-}
-
-static bool mqtt_read_stop_key(void)
-{
-    char chars[8];
-    size_t count;
-
-    while ((count = solar_os_ble_keyboard_read_chars(chars, sizeof(chars))) > 0) {
-        for (size_t i = 0; i < count; i++) {
-            if ((uint8_t)chars[i] == SOLAR_OS_KEY_APP_EXIT ||
-                chars[i] == 'q') {
-                return true;
-            }
-        }
-    }
-
-    return false;
-}
-
-static void mqtt_print_status(solar_os_shell_io_t *term)
-{
-    solar_os_mqtt_status_t status;
-    const esp_err_t err = solar_os_mqtt_get_status(&status);
-    if (err != ESP_OK) {
-        solar_os_shell_io_printf(term, "mqtt status failed: %s\n", esp_err_to_name(err));
-        return;
-    }
-
-    solar_os_shell_io_printf(term,
-                             "MQTT: %s%s\n",
-                             status.running ? "on" : "off",
-                             status.connected ? ", connected" : "");
-    solar_os_shell_io_printf(term,
-                             "Broker: %s\n",
-                             status.configured ? status.url : "(not configured)");
-    solar_os_shell_io_printf(term,
-                             "Auth: user %s, password %s\n",
-                             status.username_set ? status.username : "none",
-                             status.password_set ? "set" : "none");
-    solar_os_shell_io_printf(term, "Client: %s\n", status.client_id);
-    solar_os_shell_io_printf(term,
-                             "Messages: rx %" PRIu32 ", tx %" PRIu32 ", queued %u, dropped %" PRIu32 "\n",
-                             status.rx_count,
-                             status.tx_count,
-                             (unsigned)status.queued_messages,
-                             status.dropped_count);
-    if (status.last_error[0] != '\0') {
-        solar_os_shell_io_printf(term,
-                                 "Last error: %s (%s)\n",
-                                 status.last_error,
-                                 esp_err_to_name(status.last_esp_error));
-    }
-}
-
-static void mqtt_wait_and_print_connect(solar_os_shell_io_t *term)
-{
-    for (int i = 0; i < 50; i++) {
-        solar_os_mqtt_status_t status;
-        if (solar_os_mqtt_get_status(&status) == ESP_OK) {
-            if (status.connected) {
-                solar_os_shell_io_writeln(term, "mqtt: connected");
-                return;
-            }
-            if (status.last_error[0] != '\0') {
-                solar_os_shell_io_printf(term, "mqtt: %s\n", status.last_error);
-                return;
-            }
-        }
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
-
-    solar_os_shell_io_writeln(term, "mqtt: connecting");
-}
-
-static void mqtt_cmd_connect(solar_os_shell_io_t *term, int argc, char **argv)
-{
-    if (argc > 5) {
-        solar_os_shell_io_writeln(term, "usage: mqtt connect [url [username [password]]]");
-        return;
-    }
-
-    const char *url = argc >= 3 ? argv[2] : NULL;
-    const char *username = argc >= 4 ? argv[3] : NULL;
-    const char *password = argc >= 5 ? argv[4] : NULL;
-    const esp_err_t err = solar_os_mqtt_connect(url, username, password);
-    if (err == ESP_ERR_INVALID_STATE) {
-        solar_os_shell_io_writeln(term, "mqtt: no saved broker URL");
-        solar_os_shell_io_writeln(term, "usage: mqtt connect mqtt[s]://host[:port] [username [password]]");
-        return;
-    }
-    if (err == ESP_ERR_INVALID_ARG) {
-        solar_os_shell_io_writeln(term, "mqtt: invalid URL, username, or password");
-        return;
-    }
-    if (err != ESP_OK) {
-        solar_os_shell_io_printf(term, "mqtt connect failed: %s\n", esp_err_to_name(err));
-        return;
-    }
-
-    mqtt_wait_and_print_connect(term);
-}
-
-static void mqtt_cmd_publish(solar_os_shell_io_t *term, int argc, char **argv)
-{
-    int qos = 0;
-    bool retain = false;
-
-    if (argc < 4 ||
-        argc > 6 ||
-        (argc >= 5 && !mqtt_parse_qos(argv[4], &qos)) ||
-        (argc >= 6 && !mqtt_parse_retain(argv[5], &retain))) {
-        solar_os_shell_io_writeln(term, "usage: mqtt publish <topic> <payload> [qos] [retain]");
-        solar_os_shell_io_writeln(term, "qos: 0..2, retain: 0|1|on|off|retain");
-        return;
-    }
-
-    int msg_id = 0;
-    const char *payload = argv[3];
-    const esp_err_t err = solar_os_mqtt_publish(argv[2],
-                                                payload,
-                                                strlen(payload),
-                                                qos,
-                                                retain,
-                                                &msg_id);
-    if (err == ESP_ERR_INVALID_STATE) {
-        solar_os_shell_io_writeln(term, "mqtt: not connected");
-        return;
-    }
-    if (err == ESP_ERR_INVALID_ARG) {
-        solar_os_shell_io_writeln(term, "mqtt: invalid topic, payload, qos, or retain flag");
-        return;
-    }
-    if (err != ESP_OK) {
-        solar_os_shell_io_printf(term, "mqtt publish failed: %s\n", esp_err_to_name(err));
-        return;
-    }
-
-    solar_os_shell_io_printf(term, "mqtt publish: msg %d\n", msg_id);
-}
-
-static void mqtt_print_message(solar_os_shell_io_t *term, const solar_os_mqtt_message_t *message)
-{
-    solar_os_shell_io_printf(term,
-                             "%s %.*s%s\n",
-                             message->topic,
-                             (int)message->payload_len,
-                             message->payload,
-                             message->truncated ? " ..." : "");
-}
-
-static void mqtt_cmd_subscribe(solar_os_shell_io_t *term, int argc, char **argv)
-{
-    int qos = 0;
-
-    if (argc < 3 || argc > 4 || (argc == 4 && !mqtt_parse_qos(argv[3], &qos))) {
-        solar_os_shell_io_writeln(term, "usage: mqtt subscribe <topic> [qos]");
-        solar_os_shell_io_writeln(term, "qos: 0..2");
-        return;
-    }
-
-    int msg_id = 0;
-    const esp_err_t err = solar_os_mqtt_subscribe(argv[2], qos, &msg_id);
-    if (err == ESP_ERR_INVALID_STATE) {
-        solar_os_shell_io_writeln(term, "mqtt: not connected");
-        return;
-    }
-    if (err == ESP_ERR_INVALID_ARG) {
-        solar_os_shell_io_writeln(term, "mqtt: invalid topic or qos");
-        return;
-    }
-    if (err != ESP_OK) {
-        solar_os_shell_io_printf(term, "mqtt subscribe failed: %s\n", esp_err_to_name(err));
-        return;
-    }
-
-    solar_os_shell_io_printf(term,
-                             "mqtt subscribe: %s qos %d msg %d, %s/q to stop display\n",
-                             argv[2],
-                             qos,
-                             msg_id,
-                             solar_os_shell_io_app_exit_key(term));
-    solar_os_shell_io_flush(term);
-
-    bool stopped = false;
-    while (!stopped) {
-        if (mqtt_read_stop_key()) {
-            stopped = true;
-            break;
-        }
-
-        solar_os_mqtt_message_t message;
-        const esp_err_t read_err = solar_os_mqtt_read_message(&message, 250);
-        if (read_err == ESP_OK) {
-            mqtt_print_message(term, &message);
-            solar_os_shell_io_flush(term);
-        } else if (read_err != ESP_ERR_TIMEOUT) {
-            solar_os_shell_io_printf(term, "mqtt read failed: %s\n", esp_err_to_name(read_err));
-            break;
-        }
-    }
-
-    solar_os_shell_io_writeln(term, "mqtt subscribe: display stopped");
-}
-
-void solar_os_shell_cmd_mqtt(solar_os_context_t *ctx, int argc, char **argv)
-{
-    solar_os_shell_io_t *term = terminal(ctx);
-
-    if (argc == 1 || strcmp(argv[1], "status") == 0) {
-        if (argc > 2) {
-            solar_os_shell_io_writeln(term, "usage: mqtt status");
-            return;
-        }
-        mqtt_print_status(term);
-        return;
-    }
-
-    if (strcmp(argv[1], "connect") == 0) {
-        mqtt_cmd_connect(term, argc, argv);
-    } else if (strcmp(argv[1], "disconnect") == 0) {
-        if (argc != 2) {
-            solar_os_shell_io_writeln(term, "usage: mqtt disconnect");
-            return;
-        }
-        const esp_err_t err = solar_os_mqtt_disconnect();
-        if (err != ESP_OK) {
-            solar_os_shell_io_printf(term, "mqtt disconnect failed: %s\n", esp_err_to_name(err));
-            return;
-        }
-        solar_os_shell_io_writeln(term, "mqtt: disconnected");
-    } else if (strcmp(argv[1], "publish") == 0) {
-        mqtt_cmd_publish(term, argc, argv);
-    } else if (strcmp(argv[1], "subscribe") == 0) {
-        mqtt_cmd_subscribe(term, argc, argv);
-    } else {
-        mqtt_print_usage(term);
-    }
 }
 #endif
 
