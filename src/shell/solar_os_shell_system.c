@@ -29,6 +29,9 @@
 #ifndef SOLAR_OS_VERSION
 #define SOLAR_OS_VERSION "0.0.0"
 #endif
+#ifndef SOLAR_OS_PACKAGE_REQUIRED_CAPABILITIES
+#define SOLAR_OS_PACKAGE_REQUIRED_CAPABILITIES ""
+#endif
 
 static solar_os_shell_io_t *terminal(solar_os_context_t *ctx)
 {
@@ -118,6 +121,11 @@ void solar_os_shell_cmd_version(solar_os_context_t *ctx, int argc, char **argv)
 
     solar_os_shell_io_printf(term, "SolarOS %s\n", SOLAR_OS_VERSION);
     solar_os_shell_io_printf(term, "Flavor: %s\n", SOLAR_OS_FLAVOR_NAME);
+    solar_os_shell_io_printf(term,
+                             "Required capabilities: %s\n",
+                             SOLAR_OS_PACKAGE_REQUIRED_CAPABILITIES[0] != '\0' ?
+                                SOLAR_OS_PACKAGE_REQUIRED_CAPABILITIES :
+                                "none");
     solar_os_shell_io_write(term, "Packages: ");
     solar_os_shell_io_writeln(term, SOLAR_OS_PACKAGE_LIST);
 }
@@ -167,6 +175,158 @@ static void pkg_print_wrapped_list(solar_os_shell_io_t *term,
     solar_os_shell_io_put_char(term, '\n');
 }
 
+static bool pkg_token_next(const char **cursor, const char **token, size_t *token_len)
+{
+    if (cursor == NULL || *cursor == NULL || token == NULL || token_len == NULL) {
+        return false;
+    }
+
+    while (**cursor == ' ') {
+        (*cursor)++;
+    }
+    if (**cursor == '\0') {
+        return false;
+    }
+
+    *token = *cursor;
+    while (**cursor != '\0' && **cursor != ' ') {
+        (*cursor)++;
+    }
+    *token_len = (size_t)(*cursor - *token);
+    return true;
+}
+
+static bool pkg_token_split(const char *token,
+                            size_t token_len,
+                            const char **prefix,
+                            size_t *prefix_len,
+                            const char **name,
+                            size_t *name_len)
+{
+    if (token == NULL || token_len == 0 || prefix == NULL || prefix_len == NULL ||
+        name == NULL || name_len == NULL) {
+        return false;
+    }
+
+    for (size_t i = 0; i < token_len; i++) {
+        if (token[i] != '.') {
+            continue;
+        }
+        if (i == 0 || i + 1 >= token_len) {
+            return false;
+        }
+        *prefix = token;
+        *prefix_len = i;
+        *name = token + i + 1;
+        *name_len = token_len - i - 1;
+        return true;
+    }
+    return false;
+}
+
+static bool pkg_token_prefix_is(const char *prefix,
+                                size_t prefix_len,
+                                const char *expected)
+{
+    const size_t expected_len = strlen(expected);
+    return prefix_len == expected_len && strncmp(prefix, expected, expected_len) == 0;
+}
+
+static bool pkg_print_build_unit_group(solar_os_shell_io_t *term,
+                                       const char *text,
+                                       const char *group)
+{
+    const char *cursor = text;
+    const char *token = NULL;
+    size_t token_len = 0;
+    bool printed = false;
+
+    while (pkg_token_next(&cursor, &token, &token_len)) {
+        const char *prefix = NULL;
+        const char *name = NULL;
+        size_t prefix_len = 0;
+        size_t name_len = 0;
+
+        if (!pkg_token_split(token, token_len, &prefix, &prefix_len, &name, &name_len) ||
+            !pkg_token_prefix_is(prefix, prefix_len, group)) {
+            continue;
+        }
+
+        if (!printed) {
+            solar_os_shell_io_printf(term, "  %s\n", group);
+            printed = true;
+        }
+        solar_os_shell_io_write(term, "    ");
+        solar_os_shell_io_write_len(term, name, name_len);
+        solar_os_shell_io_put_char(term, '\n');
+    }
+    return printed;
+}
+
+static bool pkg_prefix_is_known(const char *prefix, size_t prefix_len)
+{
+    static const char * const groups[] = {"core", "service", "app", "job"};
+
+    for (size_t i = 0; i < sizeof(groups) / sizeof(groups[0]); i++) {
+        if (pkg_token_prefix_is(prefix, prefix_len, groups[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool pkg_print_other_build_units(solar_os_shell_io_t *term, const char *text)
+{
+    const char *cursor = text;
+    const char *token = NULL;
+    size_t token_len = 0;
+    bool printed = false;
+
+    while (pkg_token_next(&cursor, &token, &token_len)) {
+        const char *prefix = NULL;
+        const char *name = NULL;
+        size_t prefix_len = 0;
+        size_t name_len = 0;
+
+        if (pkg_token_split(token, token_len, &prefix, &prefix_len, &name, &name_len) &&
+            pkg_prefix_is_known(prefix, prefix_len)) {
+            continue;
+        }
+
+        if (!printed) {
+            solar_os_shell_io_writeln(term, "  other");
+            printed = true;
+        }
+        solar_os_shell_io_write(term, "    ");
+        solar_os_shell_io_write_len(term, token, token_len);
+        solar_os_shell_io_put_char(term, '\n');
+    }
+    return printed;
+}
+
+static void pkg_print_build_unit_tree(solar_os_shell_io_t *term,
+                                      const char *title,
+                                      const char *text)
+{
+    bool printed = false;
+
+    solar_os_shell_io_printf(term, "%s:\n", title);
+    if (text == NULL || text[0] == '\0') {
+        solar_os_shell_io_writeln(term, "  none");
+        return;
+    }
+
+    printed |= pkg_print_build_unit_group(term, text, "core");
+    printed |= pkg_print_build_unit_group(term, text, "service");
+    printed |= pkg_print_build_unit_group(term, text, "app");
+    printed |= pkg_print_build_unit_group(term, text, "job");
+    printed |= pkg_print_other_build_units(term, text);
+
+    if (!printed) {
+        solar_os_shell_io_writeln(term, "  none");
+    }
+}
+
 void solar_os_shell_cmd_pkg(solar_os_context_t *ctx, int argc, char **argv)
 {
     solar_os_shell_io_t *term = terminal(ctx);
@@ -183,7 +343,8 @@ void solar_os_shell_cmd_pkg(solar_os_context_t *ctx, int argc, char **argv)
         solar_os_shell_io_printf(term, "%s\n", SOLAR_OS_FLAVOR_DESCRIPTION);
     }
     pkg_print_wrapped_list(term, "Groups", SOLAR_OS_PACKAGE_GROUP_LIST);
-    pkg_print_wrapped_list(term, "Build units", SOLAR_OS_PACKAGE_LIST);
+    pkg_print_wrapped_list(term, "Required capabilities", SOLAR_OS_PACKAGE_REQUIRED_CAPABILITIES);
+    pkg_print_build_unit_tree(term, "Build units", SOLAR_OS_PACKAGE_LIST);
 }
 
 void solar_os_shell_cmd_clear(solar_os_context_t *ctx, int argc, char **argv)
@@ -703,7 +864,11 @@ void solar_os_shell_cmd_top(solar_os_context_t *ctx, int argc, char **argv)
 
 #if (configUSE_TRACE_FACILITY == 1)
     const UBaseType_t task_capacity = uxTaskGetNumberOfTasks() + 4;
-    TaskStatus_t *tasks = calloc(task_capacity, sizeof(TaskStatus_t));
+    TaskStatus_t *tasks =
+        heap_caps_calloc(task_capacity, sizeof(TaskStatus_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (tasks == NULL) {
+        tasks = heap_caps_calloc(task_capacity, sizeof(TaskStatus_t), MALLOC_CAP_8BIT);
+    }
     if (tasks == NULL) {
         solar_os_shell_io_writeln(term, "top: out of memory");
         return;
@@ -716,7 +881,7 @@ void solar_os_shell_cmd_top(solar_os_context_t *ctx, int argc, char **argv)
     UBaseType_t task_count = uxTaskGetSystemState(tasks, task_capacity, NULL);
 #endif
     if (task_count == 0) {
-        free(tasks);
+        heap_caps_free(tasks);
         solar_os_shell_io_writeln(term, "top: task snapshot failed");
         return;
     }
@@ -756,7 +921,7 @@ void solar_os_shell_cmd_top(solar_os_context_t *ctx, int argc, char **argv)
                                  stack_free);
     }
 
-    free(tasks);
+    heap_caps_free(tasks);
 #else
     solar_os_shell_io_writeln(term, "top: FreeRTOS trace facility disabled");
 #endif
