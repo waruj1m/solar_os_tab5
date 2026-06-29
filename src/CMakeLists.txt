@@ -167,6 +167,7 @@ set(SOLAR_OS_SRCS
     "shell/solar_os_shell_commands.c"
     "shell/solar_os_shell_daq.c"
     "shell/solar_os_shell_fs.c"
+    "shell/solar_os_shell_hardware.c"
     "shell/solar_os_shell_io.c"
     "shell/solar_os_shell_mqtt.c"
     "shell/solar_os_shell_network.c"
