@@ -1196,11 +1196,24 @@ static void chat_connect_with_args(const char *url,
                                    const char *token,
                                    bool announce)
 {
-    const esp_err_t err = solar_os_chat_connect(url, token, user, NULL);
+    char normalized_url[SOLAR_OS_CHAT_URL_MAX];
+    const char *connect_url = url;
+    if (url != NULL && url[0] != '\0') {
+        if (!chat_normalize_url(url, normalized_url, sizeof(normalized_url))) {
+            chat_set_status("invalid gateway URL");
+            chat_append_statusf("connect failed: invalid gateway URL");
+            return;
+        }
+        connect_url = normalized_url;
+    }
+
+    const esp_err_t err = solar_os_chat_connect(connect_url, token, user, NULL);
     if (err == ESP_OK) {
         chat_set_status("connecting");
         if (announce) {
-            chat_append_statusf("connecting %s", url != NULL && url[0] != '\0' ? url : "saved gateway");
+            chat_append_statusf("connecting %s",
+                                connect_url != NULL && connect_url[0] != '\0' ?
+                                    connect_url : "saved gateway");
         }
         chat_app.join_pending = true;
     } else {
@@ -1543,7 +1556,9 @@ static esp_err_t chat_start(solar_os_context_t *ctx)
     const int argc = solar_os_context_argc(ctx);
     int argi = 1;
     if (argc > argi && chat_arg_is_url(solar_os_context_argv(ctx, argi))) {
-        strlcpy(chat_app.initial_url, solar_os_context_argv(ctx, argi), sizeof(chat_app.initial_url));
+        (void)chat_normalize_url(solar_os_context_argv(ctx, argi),
+                                 chat_app.initial_url,
+                                 sizeof(chat_app.initial_url));
         argi++;
     }
     if (argc > argi) {
@@ -1565,6 +1580,7 @@ static esp_err_t chat_start(solar_os_context_t *ctx)
         chat_app_free_state();
         return tui_err;
     }
+    (void)solar_os_tui_enable_diff(&chat_app.tui, true);
 
     chat_app.messages = chat_app_calloc(CHAT_APP_MESSAGE_COUNT, sizeof(chat_app_message_t));
     chat_app.history = chat_app_calloc(CHAT_APP_HISTORY_COUNT, sizeof(chat_app.history[0]));
@@ -1577,6 +1593,7 @@ static esp_err_t chat_start(solar_os_context_t *ctx)
         chat_app.history_draft == NULL ||
         chat_app.event == NULL) {
         chat_free_buffers();
+        solar_os_tui_end(&chat_app.tui);
         chat_app_free_state();
         return ESP_ERR_NO_MEM;
     }
@@ -1599,8 +1616,10 @@ static void chat_stop(solar_os_context_t *ctx)
     (void)ctx;
 
     (void)solar_os_chat_disconnect();
-    chat_free_buffers();
     solar_os_tui_set_cursor_visible(&chat_app.tui, true);
+    solar_os_tui_refresh(&chat_app.tui);
+    solar_os_tui_end(&chat_app.tui);
+    chat_free_buffers();
     chat_app_free_state();
 }
 

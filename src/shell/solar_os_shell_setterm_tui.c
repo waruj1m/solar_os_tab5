@@ -484,6 +484,7 @@ static esp_err_t setterm_tui_start(solar_os_context_t *ctx)
     if (err != ESP_OK) {
         return err;
     }
+    (void)solar_os_tui_enable_diff(&setterm_tui.tui, true);
     solar_os_tui_set_cursor_visible(&setterm_tui.tui, false);
     setterm_tui_render();
     return ESP_OK;
@@ -495,6 +496,7 @@ static void setterm_tui_stop(solar_os_context_t *ctx)
     solar_os_tui_set_cursor_visible(&setterm_tui.tui, true);
     solar_os_tui_clear(&setterm_tui.tui);
     solar_os_tui_refresh(&setterm_tui.tui);
+    solar_os_tui_end(&setterm_tui.tui);
 }
 
 static bool setterm_tui_event(solar_os_context_t *ctx, const solar_os_event_t *event)

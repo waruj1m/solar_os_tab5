@@ -979,6 +979,7 @@ static esp_err_t files_start(solar_os_context_t *ctx)
     if (err != ESP_OK) {
         return err;
     }
+    (void)solar_os_tui_enable_diff(&files.tui, true);
 
     const char *arg = solar_os_context_argc(ctx) >= 2 ? solar_os_context_argv(ctx, 1) : ".";
     char start[SOLAR_OS_STORAGE_PATH_MAX];
@@ -986,6 +987,7 @@ static esp_err_t files_start(solar_os_context_t *ctx)
         solar_os_shell_resolve_path(ctx, arg, start, sizeof(start)) :
         solar_os_storage_resolve_path(arg, start, sizeof(start));
     if (err != ESP_OK) {
+        solar_os_tui_end(&files.tui);
         return err;
     }
 
@@ -999,11 +1001,13 @@ static esp_err_t files_start(solar_os_context_t *ctx)
 
     err = files_pane_load(&files.panes[0], start);
     if (err != ESP_OK) {
+        solar_os_tui_end(&files.tui);
         return err;
     }
     err = files_pane_load(&files.panes[1], start);
     if (err != ESP_OK) {
         files_pane_clear(&files.panes[0]);
+        solar_os_tui_end(&files.tui);
         return err;
     }
 
@@ -1017,6 +1021,8 @@ static void files_stop(solar_os_context_t *ctx)
 {
     (void)ctx;
     solar_os_tui_set_cursor_visible(&files.tui, true);
+    solar_os_tui_refresh(&files.tui);
+    solar_os_tui_end(&files.tui);
     files_pane_clear(&files.panes[0]);
     files_pane_clear(&files.panes[1]);
     memset(&files, 0, sizeof(files));

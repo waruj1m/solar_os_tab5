@@ -428,6 +428,7 @@ static esp_err_t wifi_tui_start(solar_os_context_t *ctx)
     if (err != ESP_OK) {
         return err;
     }
+    (void)solar_os_tui_enable_diff(&wifi_tui.tui, true);
     wifi_tui_set_status("enter acts, esc exits");
     solar_os_tui_set_cursor_visible(&wifi_tui.tui, false);
     wifi_tui_render();
@@ -440,6 +441,7 @@ static void wifi_tui_stop(solar_os_context_t *ctx)
     solar_os_tui_set_cursor_visible(&wifi_tui.tui, true);
     solar_os_tui_clear(&wifi_tui.tui);
     solar_os_tui_refresh(&wifi_tui.tui);
+    solar_os_tui_end(&wifi_tui.tui);
 }
 
 static bool wifi_tui_event(solar_os_context_t *ctx, const solar_os_event_t *event)
