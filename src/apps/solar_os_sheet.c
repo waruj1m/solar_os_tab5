@@ -63,8 +63,19 @@ typedef struct {
     char cells[SHEET_MAX_COLS][SHEET_CELL_MAX];
 } sheet_state_t;
 
-static sheet_state_t sheet;
+static sheet_state_t *sheet_state;
+#define sheet (*sheet_state)
 static solar_os_shell_io_t sheet_fallback_io;
+
+static sheet_state_t *sheet_alloc_state(void)
+{
+    sheet_state_t *state =
+        heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (state == NULL) {
+        state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    }
+    return state;
+}
 
 static solar_os_shell_io_t *sheet_io(solar_os_context_t *ctx)
 {
@@ -850,7 +861,10 @@ static void sheet_page_up(solar_os_context_t *ctx)
 
 static esp_err_t sheet_start(solar_os_context_t *ctx)
 {
-    memset(&sheet, 0, sizeof(sheet));
+    sheet_state = sheet_alloc_state();
+    if (sheet_state == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
 
     const int argc = solar_os_context_argc(ctx);
     if (argc != 2) {
@@ -887,7 +901,8 @@ static void sheet_stop(solar_os_context_t *ctx)
 {
     (void)ctx;
     sheet_free_offsets();
-    memset(&sheet, 0, sizeof(sheet));
+    heap_caps_free(sheet_state);
+    sheet_state = NULL;
 }
 
 static bool sheet_event(solar_os_context_t *ctx, const solar_os_event_t *event)

@@ -855,7 +855,11 @@ void solar_os_shell_cmd_top(solar_os_context_t *ctx, int argc, char **argv)
 
 #if (configUSE_TRACE_FACILITY == 1)
     const UBaseType_t task_capacity = uxTaskGetNumberOfTasks() + 4;
-    TaskStatus_t *tasks = calloc(task_capacity, sizeof(TaskStatus_t));
+    TaskStatus_t *tasks =
+        heap_caps_calloc(task_capacity, sizeof(TaskStatus_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (tasks == NULL) {
+        tasks = heap_caps_calloc(task_capacity, sizeof(TaskStatus_t), MALLOC_CAP_8BIT);
+    }
     if (tasks == NULL) {
         solar_os_shell_io_writeln(term, "top: out of memory");
         return;
@@ -868,7 +872,7 @@ void solar_os_shell_cmd_top(solar_os_context_t *ctx, int argc, char **argv)
     UBaseType_t task_count = uxTaskGetSystemState(tasks, task_capacity, NULL);
 #endif
     if (task_count == 0) {
-        free(tasks);
+        heap_caps_free(tasks);
         solar_os_shell_io_writeln(term, "top: task snapshot failed");
         return;
     }
@@ -908,7 +912,7 @@ void solar_os_shell_cmd_top(solar_os_context_t *ctx, int argc, char **argv)
                                  stack_free);
     }
 
-    free(tasks);
+    heap_caps_free(tasks);
 #else
     solar_os_shell_io_writeln(term, "top: FreeRTOS trace facility disabled");
 #endif

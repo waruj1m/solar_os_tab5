@@ -81,7 +81,24 @@ typedef struct {
 } plot_state_t;
 
 static const char *TAG = "solar_os_plot";
-static plot_state_t plot;
+static plot_state_t *plot_state;
+#define plot (*plot_state)
+
+static plot_state_t *plot_alloc_state(void)
+{
+    plot_state_t *state =
+        heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (state == NULL) {
+        state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    }
+    return state;
+}
+
+static void plot_free_state(void)
+{
+    heap_caps_free(plot_state);
+    plot_state = NULL;
+}
 
 static void plot_set_message(const char *message)
 {
@@ -1067,10 +1084,16 @@ static esp_err_t plot_start(solar_os_context_t *ctx)
     if (solar_os_context_gfx(ctx) == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
-    memset(&plot, 0, sizeof(plot));
+
+    plot_state = plot_alloc_state();
+    if (plot_state == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
     plot.autoscale = true;
     plot.rate_ms = PLOT_DEFAULT_RATE_MS;
     if (!plot_alloc_buffers(PLOT_DEFAULT_CAPACITY)) {
+        plot_free_state();
         return ESP_ERR_NO_MEM;
     }
 
@@ -1092,6 +1115,7 @@ static esp_err_t plot_start(solar_os_context_t *ctx)
                          &rate_ms)) {
         plot_print_usage(ctx, "invalid arguments");
         plot_free_buffers();
+        plot_free_state();
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -1112,6 +1136,7 @@ static esp_err_t plot_start(solar_os_context_t *ctx)
         }
         plot_close_live_streams();
         plot_free_buffers();
+        plot_free_state();
         return err;
     }
 
@@ -1128,6 +1153,7 @@ static void plot_stop(solar_os_context_t *ctx)
     plot_close_live_streams();
     plot_free_buffers();
     solar_os_context_set_graphics_active(ctx, false);
+    plot_free_state();
 }
 
 static void plot_pan_left(void)
