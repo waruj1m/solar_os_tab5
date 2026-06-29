@@ -728,9 +728,11 @@ static void telnet_drain_rx(solar_os_context_t *ctx)
     }
 
     uint8_t buffer[TELNET_RX_BUFFER_SIZE];
+    bool received_data = false;
     for (size_t chunk = 0; chunk < TELNET_RX_CHUNKS_PER_TICK; chunk++) {
         const ssize_t got = recv(telnet_app.fd, buffer, sizeof(buffer), 0);
         if (got > 0) {
+            received_data = true;
             telnet_app.rx_bytes += (uint32_t)got;
             for (ssize_t i = 0; i < got; i++) {
                 telnet_feed_byte(ctx, buffer[i]);
@@ -761,7 +763,9 @@ static void telnet_drain_rx(solar_os_context_t *ctx)
         telnet_request_close_with_status(ctx, status);
         return;
     }
-    telnet_flush(ctx);
+    if (received_data) {
+        telnet_flush(ctx);
+    }
 }
 
 static void telnet_send_bytes_escaped(const uint8_t *data, size_t len)
