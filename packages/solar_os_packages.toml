@@ -37,6 +37,7 @@ members = [
   "app_web",
   "app_chat",
   "job_httpd",
+  "job_chatd",
   "job_slip",
   "job_ntp_sync",
 ]
@@ -47,6 +48,7 @@ triggers = [
   "app_web",
   "app_chat",
   "job_httpd",
+  "job_chatd",
   "job_slip",
   "job_ntp_sync",
 ]
@@ -246,6 +248,11 @@ sources = ["apps/solar_os_sheet.c"]
 [packages.job_httpd]
 label = "job.httpd"
 sources = ["jobs/solar_os_httpd_job.c"]
+
+[packages.job_chatd]
+label = "job.chatd"
+sources = ["jobs/solar_os_chatd_job.c"]
+capabilities = ["psram"]
 
 [packages.job_slip]
 label = "job.slip"

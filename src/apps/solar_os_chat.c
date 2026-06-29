@@ -18,6 +18,7 @@
 #include "solar_os_tui.h"
 
 #define CHAT_APP_DEFAULT_CHANNEL "general"
+#define CHAT_APP_DEFAULT_PORT 7777
 #define CHAT_APP_CHANNEL_COUNT 32
 #define CHAT_APP_MESSAGE_COUNT 80
 #define CHAT_APP_INPUT_MAX SOLAR_OS_CHAT_TEXT_MAX
@@ -85,9 +86,57 @@ typedef struct {
 static chat_app_state_t *chat_app_state;
 #define chat_app (*chat_app_state)
 
+static bool chat_arg_is_bare_endpoint(const char *arg)
+{
+    if (arg == NULL || arg[0] == '\0' || strstr(arg, "://") != NULL) {
+        return false;
+    }
+    if (strcasecmp(arg, "local") == 0 || strcasecmp(arg, "localhost") == 0) {
+        return true;
+    }
+
+    const char *colon = strrchr(arg, ':');
+    if (colon == NULL || colon == arg || colon[1] == '\0') {
+        return false;
+    }
+    for (const char *p = arg; p < colon; p++) {
+        if (isspace((unsigned char)*p) || *p == '/') {
+            return false;
+        }
+    }
+    for (const char *p = colon + 1; *p != '\0'; p++) {
+        if (!isdigit((unsigned char)*p)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool chat_arg_is_url(const char *arg)
 {
-    return arg != NULL && strstr(arg, "://") != NULL;
+    return arg != NULL && (strstr(arg, "://") != NULL || chat_arg_is_bare_endpoint(arg));
+}
+
+static bool chat_normalize_url(const char *url, char *out, size_t out_len)
+{
+    if (out == NULL || out_len == 0) {
+        return false;
+    }
+    out[0] = '\0';
+    if (url == NULL || url[0] == '\0') {
+        return true;
+    }
+    if (strstr(url, "://") != NULL) {
+        return strlcpy(out, url, out_len) < out_len;
+    }
+    if (strcasecmp(url, "local") == 0 || strcasecmp(url, "localhost") == 0) {
+        return snprintf(out, out_len, "tcp://127.0.0.1:%u", CHAT_APP_DEFAULT_PORT) <
+            (int)out_len;
+    }
+    if (chat_arg_is_bare_endpoint(url)) {
+        return snprintf(out, out_len, "tcp://%s", url) < (int)out_len;
+    }
+    return false;
 }
 
 static bool chat_printable(uint8_t ch)

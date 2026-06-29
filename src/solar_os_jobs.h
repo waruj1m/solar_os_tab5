@@ -7,7 +7,7 @@
 #include "esp_err.h"
 #include "solar_os.h"
 
-#define SOLAR_OS_JOBS_MAX 8
+#define SOLAR_OS_JOBS_MAX 12
 
 typedef enum {
     SOLAR_OS_JOB_STOPPED,
