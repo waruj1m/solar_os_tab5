@@ -619,14 +619,13 @@ static void job_print_status(solar_os_shell_io_t *term,
     }
 
     solar_os_shell_io_printf(term,
-                             "%-12s %-8s %-11s %4s %5u %3u %s\n",
+                             "%-12s %-8s %-11s %4s %5u %3u\n",
                              status->name != NULL ? status->name : "?",
                              solar_os_job_state_name(status->state),
                              solar_os_job_kind_name(status->kind),
                              status->has_event ? "tick" : "-",
                              (unsigned)status->tick_count,
-                             (unsigned)status->resource_count,
-                             status->summary != NULL ? status->summary : "job");
+                             (unsigned)status->resource_count);
     if (status->state == SOLAR_OS_JOB_FAILED && status->last_error != ESP_OK) {
         solar_os_shell_io_printf(term,
                                  "  last error: %s\n",
@@ -636,6 +635,9 @@ static void job_print_status(solar_os_shell_io_t *term,
         return;
     }
 
+    solar_os_shell_io_printf(term,
+                             "  summary: %s\n",
+                             status->summary != NULL ? status->summary : "job");
     solar_os_shell_io_printf(term,
                              "  owner: %s\n",
                              status->owner[0] != '\0' ? status->owner : "-");
@@ -777,7 +779,7 @@ void solar_os_shell_cmd_jobs(solar_os_context_t *ctx, int argc, char **argv)
         return;
     }
 
-    solar_os_shell_io_writeln(term, "NAME         STATE    KIND        EVT  TICKS RES SUMMARY");
+    solar_os_shell_io_writeln(term, "NAME         STATE    KIND        EVT  TICKS RES");
     for (size_t i = 0; i < count; i++) {
         solar_os_job_status_t status;
         if (solar_os_jobs_get(i, &status)) {
@@ -810,7 +812,7 @@ void solar_os_shell_cmd_job(solar_os_context_t *ctx, int argc, char **argv)
             solar_os_shell_io_printf(term, "job: not found: %s\n", argv[2]);
             return;
         }
-        solar_os_shell_io_writeln(term, "NAME         STATE    KIND        EVT  TICKS RES SUMMARY");
+        solar_os_shell_io_writeln(term, "NAME         STATE    KIND        EVT  TICKS RES");
         job_print_status(term, &status, true);
         return;
     }
