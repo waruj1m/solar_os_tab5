@@ -1,8 +1,11 @@
-# SolarOS Background Jobs
+# SolarOS Jobs
 
-This document covers built-in background jobs. Foreground applications are
-documented in [apps.md](apps.md), and shell commands are documented in
-[commands.md](commands.md).
+This document covers the built-in job registry. Jobs are normally background
+workers such as log followers, DAQ capture, HTTP serving, SLIP, or NTP sync.
+The port shell is currently registered as an `interactive` compatibility job so
+headless and external-terminal workflows can still use `job start shell <port>`.
+Foreground applications are documented in [apps.md](apps.md), and shell
+commands are documented in [commands.md](commands.md).
 
 Job availability depends on the selected firmware flavor and board
 capabilities. The running system is authoritative:
@@ -12,20 +15,51 @@ jobs
 job status [name]
 ```
 
+`jobs` is intentionally compact so it fits on the built-in 65-column display
+terminal. It shows job name, state, kind, event source, tick count, and resource
+count. Use `job status <name>` for the summary, owner string, last error, and
+claimed resources.
+
 ## Job Control
 
 | Command | Description |
 | --- | --- |
-| `jobs` | List registered jobs, current state, tick count, and summary. |
-| `job status [name]` | Show all jobs, or one named job. |
+| `jobs` | List registered jobs in compact form. |
+| `job status [name]` | Show all jobs, or one named job with details. |
 | `job start <name> [args...]` | Start a job with optional arguments. |
 | `job stop <name>` | Stop a running job. |
 
 Only one instance of each job name can run at a time. Starting a running job
 first stops the previous instance, then starts it again with the new arguments.
 
+Jobs have stable owner strings in the form `job:<name>`. Jobs that claim ports,
+files, streams, or network listeners publish those resources through the job
+status model. This keeps port/resource conflict messages readable and avoids
+job-specific inspection code in the shell.
+
 Jobs that use byte-stream ports claim those ports while running. If a port is
-already owned, SolarOS reports the owner, for example `log job owns cdc0`.
+already owned, SolarOS reports the owner, for example `job log owns cdc0`.
+
+Compact list example:
+
+```text
+NAME         STATE    KIND        EVT  TICKS RES
+batmon       running  background  tick    17   1
+shell        running  interactive -        0   1
+log          stopped  background  tick     0   0
+```
+
+Detailed status example:
+
+```text
+job status log
+NAME         STATE    KIND        EVT  TICKS RES
+log          running  background  tick     8   1
+  summary: stream SolarOS logs to a port or file
+  owner: job:log
+  resources:
+  - port   cdc0 rw
+```
 
 Useful ports:
 
@@ -322,6 +356,11 @@ Notes:
 
 VT100 shell on a byte-stream port. This is the normal way to expose a clean
 SolarOS console on CDC or UART.
+
+This job is marked `interactive` because it owns a user-facing VT100 shell
+session. It remains under `job start shell <port>` for compatibility and for
+headless boards, while display foreground apps are managed by the session
+commands documented in [commands.md](commands.md).
 
 Usage:
 
