@@ -9,14 +9,19 @@
 #include "solar_os_log.h"
 #include "esp_netif.h"
 #include "esp_netif_ip_addr.h"
-#include "esp_wifi.h"
-#include "esp_wifi_default.h"
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
+#if SOC_WIFI_SUPPORTED
+#include "esp_wifi.h"
+#include "esp_wifi_default.h"
+#endif
+
 static const char *TAG = "solar_os_wifi";
+
+#if SOC_WIFI_SUPPORTED
 
 #define SOLAR_OS_WIFI_DEFAULT_AP_SSID "SolarOS-sol"
 #define SOLAR_OS_WIFI_DEFAULT_AP_CHANNEL 6
@@ -1865,3 +1870,117 @@ void solar_os_wifi_get_status_text(char *buffer, size_t len)
         strlcpy(buffer, solar_os_wifi_state_name(status.state), len);
     }
 }
+
+#else
+
+const char *solar_os_wifi_state_name(solar_os_wifi_state_t state)
+{
+    (void)state;
+    return "unsupported";
+}
+
+esp_err_t solar_os_wifi_init(void)
+{
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t solar_os_wifi_start(void)
+{
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t solar_os_wifi_stop(void)
+{
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t solar_os_wifi_connect(const char *ssid, const char *password)
+{
+    (void)ssid;
+    (void)password;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t solar_os_wifi_connect_saved(void)
+{
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t solar_os_wifi_disconnect(void)
+{
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t solar_os_wifi_forget(void)
+{
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t solar_os_wifi_forget_ssid(const char *ssid)
+{
+    (void)ssid;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t solar_os_wifi_forget_all(void)
+{
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t solar_os_wifi_known(solar_os_wifi_profile_t *profiles, size_t max_profiles, size_t *count)
+{
+    (void)profiles;
+    (void)max_profiles;
+    if (count != NULL) *count = 0;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+bool solar_os_wifi_is_known_ssid(const char *ssid)
+{
+    (void)ssid;
+    return false;
+}
+
+esp_err_t solar_os_wifi_ap_start(const char *ssid, const char *password, const char *auth)
+{
+    (void)ssid;
+    (void)password;
+    (void)auth;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t solar_os_wifi_ap_stop(void)
+{
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t solar_os_wifi_nat_set(bool enabled)
+{
+    (void)enabled;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t solar_os_wifi_scan(solar_os_wifi_ap_t *aps, size_t max_aps, size_t *found)
+{
+    (void)aps;
+    (void)max_aps;
+    if (found != NULL) *found = 0;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+void solar_os_wifi_get_status(solar_os_wifi_status_t *status)
+{
+    if (status != NULL) {
+        memset(status, 0, sizeof(*status));
+        status->state = SOLAR_OS_WIFI_STATE_OFF;
+    }
+}
+
+void solar_os_wifi_get_status_text(char *buffer, size_t len)
+{
+    if (buffer != NULL && len > 0) {
+        strlcpy(buffer, "unsupported", len);
+    }
+}
+
+#endif

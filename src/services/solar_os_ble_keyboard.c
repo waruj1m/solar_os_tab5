@@ -7,10 +7,12 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "esp_check.h"
+
+#if SOC_BT_SUPPORTED
 #include "esp_bt.h"
 #include "esp_bt_defs.h"
 #include "esp_bt_main.h"
-#include "esp_check.h"
 #include "esp_gap_ble_api.h"
 #include "esp_gatt_defs.h"
 #include "esp_gattc_api.h"
@@ -18,6 +20,7 @@
 #include "esp_hidh.h"
 #include "esp_hidh_gattc.h"
 #include "esp_private/esp_hidh_private.h"
+#endif
 #include "solar_os_log.h"
 #include "solar_os_power.h"
 #include "freertos/FreeRTOS.h"
@@ -67,6 +70,8 @@
 #define LATIN1_A_UMLAUT_LOWER ((char)0xe4)
 #define LATIN1_O_UMLAUT_LOWER ((char)0xf6)
 #define LATIN1_U_UMLAUT_LOWER ((char)0xfc)
+
+#if SOC_BT_SUPPORTED
 
 typedef enum {
     BLE_KEYBOARD_IDLE,
@@ -3513,3 +3518,116 @@ esp_err_t solar_os_ble_keyboard_forget(void)
 
     return ret;
 }
+
+#else
+
+void solar_os_ble_keyboard_get_status(char *buffer, size_t buffer_len)
+{
+    if (buffer != NULL && buffer_len > 0) strlcpy(buffer, "unsupported", buffer_len);
+}
+
+bool solar_os_ble_keyboard_is_connected(void) { return false; }
+bool solar_os_ble_keyboard_is_scanning(void) { return false; }
+bool solar_os_ble_keyboard_is_pairing(void) { return false; }
+size_t solar_os_ble_keyboard_remembered_count(void) { return 0; }
+size_t solar_os_ble_keyboard_read_chars(char *buffer, size_t buffer_len) { (void)buffer; (void)buffer_len; return 0; }
+
+void solar_os_ble_keyboard_get_repeat(uint16_t *rate_cps, uint16_t *delay_ms)
+{
+    if (rate_cps != NULL) *rate_cps = 0;
+    if (delay_ms != NULL) *delay_ms = 0;
+}
+
+esp_err_t solar_os_ble_keyboard_set_repeat(uint16_t rate_cps, uint16_t delay_ms)
+{
+    (void)rate_cps; (void)delay_ms;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t solar_os_ble_keyboard_set_layout(solar_os_ble_keyboard_layout_t layout)
+{
+    (void)layout;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+const char *solar_os_ble_keyboard_layout_name(solar_os_ble_keyboard_layout_t layout)
+{
+    (void)layout;
+    return "unsupported";
+}
+
+bool solar_os_ble_keyboard_parse_layout(const char *name, solar_os_ble_keyboard_layout_t *layout)
+{
+    (void)name;
+    if (layout != NULL) *layout = 0;
+    return false;
+}
+
+const char *solar_os_ble_keyboard_addr_type_name(uint8_t addr_type)
+{
+    (void)addr_type;
+    return "unsupported";
+}
+
+bool solar_os_ble_keyboard_parse_addr_type(const char *name, uint8_t *addr_type)
+{
+    (void)name;
+    if (addr_type != NULL) *addr_type = 0;
+    return false;
+}
+
+solar_os_ble_keyboard_layout_t solar_os_ble_keyboard_layout(void) { return 0; }
+esp_err_t solar_os_ble_keyboard_init(void) { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t solar_os_ble_keyboard_scan(solar_os_ble_keyboard_scan_result_t *results, size_t max_results, size_t *found)
+{
+    (void)results; (void)max_results;
+    if (found != NULL) *found = 0;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t solar_os_ble_gatt_connect(const uint8_t bda[6], uint8_t addr_type, uint32_t timeout_ms)
+{
+    (void)bda; (void)addr_type; (void)timeout_ms;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t solar_os_ble_gatt_disconnect(void) { return ESP_ERR_NOT_SUPPORTED; }
+
+void solar_os_ble_gatt_get_status(solar_os_ble_gatt_status_t *status)
+{
+    if (status != NULL) memset(status, 0, sizeof(*status));
+}
+
+esp_err_t solar_os_ble_gatt_services(solar_os_ble_gatt_service_t *services, size_t max_services, size_t *count)
+{
+    (void)services; (void)max_services;
+    if (count != NULL) *count = 0;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t solar_os_ble_gatt_characteristics(size_t service_index, solar_os_ble_gatt_characteristic_t *chars, size_t max_chars, size_t *count)
+{
+    (void)service_index; (void)chars; (void)max_chars;
+    if (count != NULL) *count = 0;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t solar_os_ble_gatt_read(uint16_t handle, uint8_t *value, size_t max_len, size_t *value_len, uint32_t timeout_ms)
+{
+    (void)handle; (void)value; (void)max_len; (void)value_len; (void)timeout_ms;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t solar_os_ble_gatt_write(uint16_t handle, const uint8_t *value, size_t value_len, bool with_response, uint32_t timeout_ms)
+{
+    (void)handle; (void)value; (void)value_len; (void)with_response; (void)timeout_ms;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t solar_os_ble_keyboard_start_pairing(void) { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t solar_os_ble_keyboard_cancel_pairing(void) { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t solar_os_ble_keyboard_prepare_sleep(uint32_t timeout_ms) { (void)timeout_ms; return ESP_ERR_NOT_SUPPORTED; }
+void solar_os_ble_keyboard_resume(void) {}
+esp_err_t solar_os_ble_keyboard_forget(void) { return ESP_ERR_NOT_SUPPORTED; }
+
+#endif

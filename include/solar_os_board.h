@@ -4,6 +4,8 @@
 #include "boards/waveshare_esp32_s3_rlcd_4_2.h"
 #elif defined(SOLAR_OS_BOARD_ESP32_S3_DEVKITC1_N16R8)
 #include "boards/esp32_s3_devkitc1_n16r8.h"
+#elif defined(SOLAR_OS_BOARD_M5STACK_TAB5)
+#include "boards/m5stack_tab5.h"
 #else
 #error "No SolarOS board target selected. Build through a PlatformIO env with a matching boards/<target>.cmake profile."
 #endif

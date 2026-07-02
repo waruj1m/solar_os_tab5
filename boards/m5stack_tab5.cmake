@@ -1,0 +1,38 @@
+set(SOLAR_OS_BOARD_ID "m5stack_tab5")
+set(SOLAR_OS_BOARD_NAME "M5Stack Tab5 (ESP32-P4)")
+set(SOLAR_OS_BOARD_DEFINE "SOLAR_OS_BOARD_M5STACK_TAB5")
+
+include("${CMAKE_CURRENT_LIST_DIR}/drivers/cdc_usb_serial_jtag.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/drivers/uart_esp_idf.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/drivers/display_mipi_dsi.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/drivers/storage_sdmmc.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/drivers/i2c_esp_idf.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/drivers/rtc_rx8130ce.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/drivers/sensors_bmi270.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/drivers/audio_es8388_es7210.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/drivers/battery_ina226.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/drivers/gpio_esp_idf.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/drivers/touch_gt911.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/drivers/adc_esp_idf.cmake")
+
+set(SOLAR_OS_BOARD_HAS_PSRAM ON)
+set(SOLAR_OS_BOARD_PSRAM_BYTES 33554432)
+set(SOLAR_OS_BOARD_HAS_DISPLAY ON)
+set(SOLAR_OS_BOARD_HAS_GFX ON)
+set(SOLAR_OS_BOARD_HAS_CDC ON)
+set(SOLAR_OS_BOARD_HAS_UART ON)
+set(SOLAR_OS_BOARD_HAS_SD ON)
+set(SOLAR_OS_BOARD_HAS_I2C ON)
+set(SOLAR_OS_BOARD_HAS_RTC ON)
+set(SOLAR_OS_BOARD_HAS_BATTERY ON)
+set(SOLAR_OS_BOARD_HAS_AUDIO ON)
+# Wi-Fi and BLE are provided by ESP32-C6 coprocessor via SDIO hosted mode.
+# The board declares these capabilities but the actual RF init is deferred
+# to the esp_wifi_remote / esp_hosted stack at runtime.
+set(SOLAR_OS_BOARD_HAS_WIFI ON)
+set(SOLAR_OS_BOARD_HAS_BLE ON)
+set(SOLAR_OS_BOARD_HAS_GPIO ON)
+set(SOLAR_OS_BOARD_HAS_KEY ON)
+set(SOLAR_OS_BOARD_HAS_ADC ON)
+# Tab5 does not expose PWM pins through safe expansion GPIOs.
+set(SOLAR_OS_BOARD_HAS_PWM OFF)

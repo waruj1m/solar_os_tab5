@@ -2,11 +2,14 @@
 
 #include <string.h>
 
-#include "esp_bt.h"
 #include "esp_timer.h"
 #include "esp_pm.h"
 #include "nvs.h"
 #include "solar_os_log.h"
+
+#if SOC_BT_SUPPORTED
+#include "esp_bt.h"
+#endif
 
 #define POWER_NVS_NAMESPACE "power"
 #define POWER_NVS_PROFILE_KEY "profile"
