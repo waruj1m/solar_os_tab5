@@ -6,9 +6,16 @@
 #include <string.h>
 
 #include "esp_heap_caps.h"
+#include "solar_os_board.h"
 #include "solar_os_fonts.h"
 #include "solar_os_log.h"
 #include "nvs.h"
+
+/* How many 90-degree steps the u8g2 frame must be rotated so that user
+ * orientation 0 is upright on this board's panel. */
+#ifndef SOLAR_OS_BOARD_DISPLAY_ROTATION_OFFSET
+#define SOLAR_OS_BOARD_DISPLAY_ROTATION_OFFSET 0
+#endif
 
 #define TERM_MARGIN_X 4
 #define TERM_MARGIN_Y 3
@@ -368,18 +375,12 @@ static size_t terminal_line_len(const solar_os_terminal_t *terminal,
 
 static const u8g2_cb_t *terminal_rotation_cb(uint16_t degrees)
 {
-    switch (degrees) {
-    case 0:
-        return U8G2_R1;
-    case 90:
-        return U8G2_R2;
-    case 180:
-        return U8G2_R3;
-    case 270:
-        return U8G2_R0;
-    default:
+    static const u8g2_cb_t *const rotations[] = {U8G2_R0, U8G2_R1, U8G2_R2, U8G2_R3};
+
+    if (degrees > 270 || (degrees % 90) != 0) {
         return NULL;
     }
+    return rotations[(SOLAR_OS_BOARD_DISPLAY_ROTATION_OFFSET + degrees / 90) % 4];
 }
 
 static bool terminal_orientation_is_valid(uint16_t degrees)

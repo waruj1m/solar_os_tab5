@@ -8,7 +8,13 @@
 
 #include "diskio_impl.h"
 #include "diskio_sdmmc.h"
+#include "solar_os_board.h"
+#if SOLAR_OS_BOARD_SD_USE_SPI
+#include "driver/sdspi_host.h"
+#include "driver/spi_common.h"
+#else
 #include "driver/sdmmc_host.h"
+#endif
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
@@ -89,6 +95,63 @@ static void set_mount_error_status(esp_err_t err)
     }
 }
 
+#if SOLAR_OS_BOARD_SD_USE_SPI
+static bool sd_spi_bus_initialized;
+
+static void sd_card_deinit_host(void)
+{
+    if (host.flags & SDMMC_HOST_FLAG_DEINIT_ARG) {
+        host.deinit_p(host.slot);
+    } else {
+        host.deinit();
+    }
+    if (sd_spi_bus_initialized) {
+        spi_bus_free(SOLAR_OS_BOARD_SD_SPI_HOST);
+        sd_spi_bus_initialized = false;
+    }
+}
+
+static esp_err_t sd_card_init_host(void)
+{
+    host = (sdmmc_host_t)SDSPI_HOST_DEFAULT();
+
+    const spi_bus_config_t bus_config = {
+        .mosi_io_num = SOLAR_OS_BOARD_PIN_SD_MOSI,
+        .miso_io_num = SOLAR_OS_BOARD_PIN_SD_MISO,
+        .sclk_io_num = SOLAR_OS_BOARD_PIN_SD_SCK,
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1,
+        .max_transfer_sz = 4000,
+    };
+    esp_err_t ret = spi_bus_initialize(SOLAR_OS_BOARD_SD_SPI_HOST, &bus_config,
+                                       SDSPI_DEFAULT_DMA);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+    sd_spi_bus_initialized = true;
+
+    ret = host.init();
+    if (ret != ESP_OK) {
+        spi_bus_free(SOLAR_OS_BOARD_SD_SPI_HOST);
+        sd_spi_bus_initialized = false;
+        return ret;
+    }
+
+    sdspi_device_config_t device_config = SDSPI_DEVICE_CONFIG_DEFAULT();
+    device_config.host_id = SOLAR_OS_BOARD_SD_SPI_HOST;
+    device_config.gpio_cs = SOLAR_OS_BOARD_PIN_SD_CS;
+
+    sdspi_dev_handle_t device_handle;
+    ret = sdspi_host_init_device(&device_config, &device_handle);
+    if (ret != ESP_OK) {
+        sd_card_deinit_host();
+        return ret;
+    }
+
+    host.slot = device_handle;
+    return ESP_OK;
+}
+#else
 static void sd_card_make_slot_config(sdmmc_slot_config_t *slot_config)
 {
     *slot_config = (sdmmc_slot_config_t)SDMMC_SLOT_CONFIG_DEFAULT();
@@ -109,6 +172,27 @@ static void sd_card_deinit_host(void)
         host.deinit();
     }
 }
+
+static esp_err_t sd_card_init_host(void)
+{
+    host = (sdmmc_host_t)SDMMC_HOST_DEFAULT();
+    sdmmc_slot_config_t slot_config;
+    sd_card_make_slot_config(&slot_config);
+
+    esp_err_t ret = host.init();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ret = sdmmc_host_init_slot(host.slot, &slot_config);
+    if (ret != ESP_OK) {
+        sd_card_deinit_host();
+        return ret;
+    }
+
+    return ESP_OK;
+}
+#endif
 
 static esp_err_t sd_card_read_sector(uint64_t sector, uint8_t *buffer)
 {
@@ -450,19 +534,8 @@ static esp_err_t ensure_card_ready(void)
         return ESP_OK;
     }
 
-    host = (sdmmc_host_t)SDMMC_HOST_DEFAULT();
-    sdmmc_slot_config_t slot_config;
-    sd_card_make_slot_config(&slot_config);
-
-    esp_err_t ret = host.init();
+    esp_err_t ret = sd_card_init_host();
     if (ret != ESP_OK) {
-        set_mount_error_status(ret);
-        return ret;
-    }
-
-    ret = sdmmc_host_init_slot(host.slot, &slot_config);
-    if (ret != ESP_OK) {
-        sd_card_deinit_host();
         set_mount_error_status(ret);
         return ret;
     }

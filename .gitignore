@@ -11,6 +11,7 @@ sdkconfig.old
 sdkconfig.*
 !sdkconfig.defaults
 !sdkconfig.defaults.*
+!sdkconfig.cardputer.defaults
 managed_components/
 dependencies.lock
 
@@ -18,3 +19,9 @@ dependencies.lock
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch/
+
+# CCE (code-context-engine)
+# CCE local cache (per-machine, not for version control)
+.cce/
+# Claude Code local settings written by cce init
+.claude/settings.local.json

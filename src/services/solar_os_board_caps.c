@@ -25,6 +25,7 @@ static const board_capability_name_t capability_names[] = {
     {SOLAR_OS_BOARD_CAP_ADC, "adc"},
     {SOLAR_OS_BOARD_CAP_PWM, "pwm"},
     {SOLAR_OS_BOARD_CAP_KEY, "key"},
+    {SOLAR_OS_BOARD_CAP_KEYBOARD, "keyboard"},
     {SOLAR_OS_BOARD_CAP_TEMPERATURE, "temperature"},
     {SOLAR_OS_BOARD_CAP_HUMIDITY, "humidity"},
 };
@@ -47,6 +48,7 @@ solar_os_board_capabilities_t solar_os_board_capabilities(void)
         (SOLAR_OS_BOARD_HAS_ADC ? SOLAR_OS_BOARD_CAP_ADC : 0U) |
         (SOLAR_OS_BOARD_HAS_PWM ? SOLAR_OS_BOARD_CAP_PWM : 0U) |
         (SOLAR_OS_BOARD_HAS_KEY ? SOLAR_OS_BOARD_CAP_KEY : 0U) |
+        (SOLAR_OS_BOARD_HAS_KEYBOARD ? SOLAR_OS_BOARD_CAP_KEYBOARD : 0U) |
         (SOLAR_OS_BOARD_HAS_TEMPERATURE ? SOLAR_OS_BOARD_CAP_TEMPERATURE : 0U) |
         (SOLAR_OS_BOARD_HAS_HUMIDITY ? SOLAR_OS_BOARD_CAP_HUMIDITY : 0U) |
         (SOLAR_OS_BOARD_HAS_PSRAM ? SOLAR_OS_BOARD_CAP_PSRAM : 0U);

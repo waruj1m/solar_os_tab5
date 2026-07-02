@@ -1,0 +1,18 @@
+[flavor]
+name = "cardputer"
+description = "SolarOS for the M5Stack Cardputer: core, network tools, games, and utilities that fit without PSRAM."
+
+[packages]
+core = true
+audio = false
+net = true
+media = false
+games = true
+python = false
+lua = false
+utils = true
+# No PSRAM on the Cardputer: drop packages that require it.
+app_web = false
+app_chat = false
+app_reader = false
+job_chatd = false

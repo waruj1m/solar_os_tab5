@@ -933,6 +933,9 @@ static DIR *ramfs_vfs_opendir(void *ctx, const char *name)
 
     dir = heap_caps_calloc(1, sizeof(*dir), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (dir == NULL) {
+        dir = heap_caps_calloc(1, sizeof(*dir), MALLOC_CAP_8BIT);
+    }
+    if (dir == NULL) {
         errno = ENOMEM;
         goto out;
     }

@@ -11,7 +11,11 @@ Import("env")
 
 
 def _selected_flavor() -> str:
-    return os.environ.get("SOLAR_OS_FLAVOR") or "full"
+    return (
+        os.environ.get("SOLAR_OS_FLAVOR")
+        or env.GetProjectOption("custom_solar_os_flavor", "")
+        or "full"
+    )
 
 
 def _selected_board() -> str:

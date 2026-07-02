@@ -16,7 +16,13 @@
 #include "solar_os_syntax.h"
 #include "solar_os_terminal.h"
 
+#if SOLAR_OS_BOARD_HAS_PSRAM
 #define EDITOR_BUFFER_CAPACITY (256 * 1024)
+#else
+/* ponytail: no-PSRAM boards get a smaller fixed buffer; grow-on-demand if
+ * 64K files prove too small on the Cardputer. */
+#define EDITOR_BUFFER_CAPACITY (64 * 1024)
+#endif
 #define EDITOR_TAB_WIDTH 4
 
 typedef struct {
@@ -927,6 +933,9 @@ static esp_err_t edit_start(solar_os_context_t *ctx)
     memset(&editor, 0, sizeof(editor));
 
     editor.buffer = heap_caps_malloc(EDITOR_BUFFER_CAPACITY, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (editor.buffer == NULL) {
+        editor.buffer = heap_caps_malloc(EDITOR_BUFFER_CAPACITY, MALLOC_CAP_8BIT);
+    }
     if (editor.buffer == NULL) {
         return ESP_ERR_NO_MEM;
     }

@@ -450,6 +450,9 @@ esp_err_t solar_os_ssh_start(const solar_os_ssh_config_t *config,
     solar_os_ssh_session_t *session =
         heap_caps_calloc(1, sizeof(*session), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (session == NULL) {
+        session = heap_caps_calloc(1, sizeof(*session), MALLOC_CAP_8BIT);
+    }
+    if (session == NULL) {
         return ESP_ERR_NO_MEM;
     }
 

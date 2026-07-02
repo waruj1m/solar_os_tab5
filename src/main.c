@@ -34,6 +34,9 @@
 #include "solar_os_fonts.h"
 #include "solar_os_i2c.h"
 #include "solar_os_jobs.h"
+#if SOLAR_OS_BOARD_HAS_KEYBOARD
+#include "solar_os_keyboard.h"
+#endif
 #include "solar_os_log.h"
 #include "solar_os_memory.h"
 #if SOLAR_OS_PACKAGE_NET
@@ -206,6 +209,7 @@ static void print_boot_summary(void)
                   SOLAR_OS_BOARD_DISPLAY_CONTROLLER,
                   SOLAR_OS_BOARD_DISPLAY_WIDTH,
                   SOLAR_OS_BOARD_DISPLAY_HEIGHT);
+#ifdef SOLAR_OS_BOARD_PIN_LCD_TE
     SOLAR_OS_LOGI(TAG,
                   "Display pins: MOSI=%d SCK=%d DC=%d CS=%d RST=%d TE=%d",
                   SOLAR_OS_BOARD_PIN_LCD_MOSI,
@@ -214,6 +218,15 @@ static void print_boot_summary(void)
                   SOLAR_OS_BOARD_PIN_LCD_CS,
                   SOLAR_OS_BOARD_PIN_LCD_RST,
                   SOLAR_OS_BOARD_PIN_LCD_TE);
+#else
+    SOLAR_OS_LOGI(TAG,
+                  "Display pins: MOSI=%d SCK=%d DC=%d CS=%d RST=%d",
+                  SOLAR_OS_BOARD_PIN_LCD_MOSI,
+                  SOLAR_OS_BOARD_PIN_LCD_SCK,
+                  SOLAR_OS_BOARD_PIN_LCD_DC,
+                  SOLAR_OS_BOARD_PIN_LCD_CS,
+                  SOLAR_OS_BOARD_PIN_LCD_RST);
+#endif
 #endif
 #ifdef SOLAR_OS_BOARD_I2C_PORT
     SOLAR_OS_LOGI(TAG,
@@ -691,42 +704,51 @@ static void dispatch_char_to_foreground(char ch)
     solar_os_sessions_dispatch_foreground_event(&event);
 }
 
+static void dispatch_char_buffer(const char *chars, size_t count)
+{
+    solar_os_power_note_activity(millis_u32());
+    for (size_t i = 0; i < count; i++) {
+        const char ch = chars[i];
+
+        if ((uint8_t)ch == SOLAR_OS_KEY_ALT_PREFIX) {
+            if (alt_prefix_pending) {
+                dispatch_char_to_foreground((char)SOLAR_OS_KEY_ALT_PREFIX);
+            }
+            alt_prefix_pending = true;
+            continue;
+        }
+
+        if (alt_prefix_pending) {
+            alt_prefix_pending = false;
+            if (ch == '\t') {
+                solar_os_sessions_cycle_next();
+                process_app_requests();
+                continue;
+            }
+            dispatch_char_to_foreground((char)SOLAR_OS_KEY_ALT_PREFIX);
+        }
+
+        dispatch_char_to_foreground(ch);
+        process_app_requests();
+    }
+}
+
 static void dispatch_keyboard_chars(void)
 {
     char chars[32];
     size_t count;
 
-    if (!board_has(SOLAR_OS_BOARD_CAP_BLE)) {
-        return;
-    }
-
-    while ((count = solar_os_ble_keyboard_read_chars(chars, sizeof(chars))) > 0) {
-        solar_os_power_note_activity(millis_u32());
-        for (size_t i = 0; i < count; i++) {
-            const char ch = chars[i];
-
-            if ((uint8_t)ch == SOLAR_OS_KEY_ALT_PREFIX) {
-                if (alt_prefix_pending) {
-                    dispatch_char_to_foreground((char)SOLAR_OS_KEY_ALT_PREFIX);
-                }
-                alt_prefix_pending = true;
-                continue;
-            }
-
-            if (alt_prefix_pending) {
-                alt_prefix_pending = false;
-                if (ch == '\t') {
-                    solar_os_sessions_cycle_next();
-                    process_app_requests();
-                    continue;
-                }
-                dispatch_char_to_foreground((char)SOLAR_OS_KEY_ALT_PREFIX);
-            }
-
-            dispatch_char_to_foreground(ch);
-            process_app_requests();
+    if (board_has(SOLAR_OS_BOARD_CAP_BLE)) {
+        while ((count = solar_os_ble_keyboard_read_chars(chars, sizeof(chars))) > 0) {
+            dispatch_char_buffer(chars, count);
         }
     }
+
+#if SOLAR_OS_BOARD_HAS_KEYBOARD
+    while ((count = solar_os_keyboard_read_chars(chars, sizeof(chars))) > 0) {
+        dispatch_char_buffer(chars, count);
+    }
+#endif
 }
 
 static void dispatch_app_tick(void)
@@ -919,6 +941,13 @@ static void init_peripherals(void)
             SOLAR_OS_LOGE(TAG, "BLE keyboard init failed: %s", esp_err_to_name(ble_err));
         }
     }
+
+#if SOLAR_OS_BOARD_HAS_KEYBOARD
+    const esp_err_t kb_err = solar_os_keyboard_init();
+    if (kb_err != ESP_OK) {
+        SOLAR_OS_LOGE(TAG, "Built-in keyboard init failed: %s", esp_err_to_name(kb_err));
+    }
+#endif
 }
 
 static void process_app_requests(void)
@@ -992,6 +1021,12 @@ static void start_headless_shell_if_needed(void)
 
 void app_main(void)
 {
+#ifdef SOLAR_OS_DEBUG_BOOT_DELAY_MS
+    for (int i = 0; i < SOLAR_OS_DEBUG_BOOT_DELAY_MS / 1000; i++) {
+        ESP_LOGI(TAG, "debug boot delay %d", i);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+#endif
     ESP_ERROR_CHECK(init_nvs());
     const esp_err_t log_err = solar_os_log_init();
     if (log_err != ESP_OK) {

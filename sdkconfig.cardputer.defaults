@@ -1,0 +1,9 @@
+# M5Stack Cardputer overrides: 8 MB flash, no PSRAM.
+# Applied after sdkconfig.defaults via SDKCONFIG_DEFAULTS.
+# CONFIG_ESPTOOLPY_FLASHSIZE_16MB is not set
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+# CONFIG_SPIRAM is not set
+# Bring-up: capture panics to the coredump partition.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
