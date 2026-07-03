@@ -6,6 +6,8 @@
 #include "boards/esp32_s3_devkitc1_n16r8.h"
 #elif defined(SOLAR_OS_BOARD_M5STACK_CARDPUTER)
 #include "boards/m5stack_cardputer.h"
+#elif defined(SOLAR_OS_BOARD_M5STACK_TAB5)
+#include "boards/m5stack_tab5.h"
 #else
 #error "No SolarOS board target selected. Build through a PlatformIO env with a matching boards/<target>.cmake profile."
 #endif

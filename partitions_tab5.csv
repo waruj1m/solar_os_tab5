@@ -1,0 +1,8 @@
+# Name,   Type, SubType, Offset,  Size, Flags
+# 16 MB flash, two ESP-IDF OTA app slots plus a coredump partition for bring-up.
+nvs,      data, nvs,      ,        0x4000,
+otadata,  data, ota,      ,        0x2000,
+phy_init, data, phy,      ,        0x1000,
+coredump, data, coredump, ,        0x10000,
+ota_0,    app,  ota_0,    ,        0x7E0000,
+ota_1,    app,  ota_1,    ,        0x7E0000,

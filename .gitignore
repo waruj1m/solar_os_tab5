@@ -12,6 +12,7 @@ sdkconfig.*
 !sdkconfig.defaults
 !sdkconfig.defaults.*
 !sdkconfig.cardputer.defaults
+!sdkconfig.tab5.defaults
 managed_components/
 dependencies.lock
 

@@ -188,11 +188,14 @@ def load_flavor(path: Path,
             for member in group_def.members:
                 packages_enabled[member] = True
 
-    for package, value in package_overrides.items():
-        packages_enabled[package] = value
-
     for member in catalog.group_defs["core"].members:
         packages_enabled[member] = True
+
+    # Explicit per-package overrides win, even over core membership, so a
+    # flavor can drop a core service its hardware cannot support (e.g. BLE
+    # on the radio-less ESP32-P4).
+    for package, value in package_overrides.items():
+        packages_enabled[package] = value
 
     groups_effective = dict(groups_enabled)
     groups_effective["core"] = True

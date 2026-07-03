@@ -1,0 +1,15 @@
+[flavor]
+name = "tab5"
+description = "SolarOS for the M5Stack Tab5: full package set on 32 MB PSRAM; BLE excluded (ESP32-P4 has no radio, WiFi is hosted on the ESP32-C6)."
+
+[packages]
+core = true
+audio = true
+net = true
+media = true
+games = true
+python = true
+lua = true
+utils = true
+# ESP32-P4 has no Bluetooth controller and no IDF bt component.
+service_ble = false

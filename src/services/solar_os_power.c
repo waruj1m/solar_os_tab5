@@ -2,7 +2,10 @@
 
 #include <string.h>
 
+#include "sdkconfig.h"
+#if CONFIG_BT_ENABLED
 #include "esp_bt.h"
+#endif
 #include "esp_timer.h"
 #include "esp_pm.h"
 #include "nvs.h"

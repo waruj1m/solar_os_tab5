@@ -1,0 +1,21 @@
+# M5Stack Tab5 overrides: ESP32-P4, 32 MB PSRAM, no radio on the P4.
+# Applied after sdkconfig.defaults via SDKCONFIG_DEFAULTS.
+CONFIG_IDF_TARGET="esp32p4"
+# Tab5 ships ESP32-P4 ES silicon (pre rev 3.00). pioarduino picks the rev<3
+# sections.ld for chip_variant esp32p4_es, so REV_MIN must agree or memory.ld
+# (from sdkconfig) and sections.ld disagree about sram regions and the link
+# fails with undefined _bss_start / sram_low not declared.
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_1=y
+# No Bluetooth controller on the P4; the tab5 flavor also excludes service_ble.
+# CONFIG_BT_ENABLED is not set
+# P4 PSRAM (200 MHz needs the experimental flag). XIP-from-PSRAM and L2 cache
+# resize from the M5 demo broke the IDF 5.5 linker script generation
+# (sram_low/sram_high region mismatch); they are perf tuning, not needed.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+# Bring-up: capture panics to the coredump partition.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y

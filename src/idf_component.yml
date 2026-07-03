@@ -5,3 +5,13 @@ dependencies:
     version: "~1.1.0"
   espressif/esp_codec_dev:
     version: "~1.4.0"
+  # ESP32-P4 has no radio: esp_wifi_remote + esp_hosted provide the standard
+  # esp_wifi/esp_netif API backed by the on-board ESP32-C6 over SDIO.
+  espressif/esp_wifi_remote:
+    version: "*"
+    rules:
+      - if: "target in [esp32p4]"
+  espressif/esp_hosted:
+    version: "*"
+    rules:
+      - if: "target in [esp32p4]"
