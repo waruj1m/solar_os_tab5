@@ -2,6 +2,7 @@
 
 #include "driver/gpio.h"
 #include "driver/i2c_types.h"
+#include "driver/i2s_types.h"
 
 #define SOLAR_OS_BOARD_ID "m5stack_tab5"
 #define SOLAR_OS_BOARD_NAME "M5Stack Tab5"
@@ -18,7 +19,8 @@
      SOLAR_OS_BOARD_CAP_WIFI | \
      SOLAR_OS_BOARD_CAP_SD | \
      SOLAR_OS_BOARD_CAP_RTC | \
-     SOLAR_OS_BOARD_CAP_BATTERY)
+     SOLAR_OS_BOARD_CAP_BATTERY | \
+     SOLAR_OS_BOARD_CAP_AUDIO)
 
 /* 5" 720x1280 portrait-native IPS behind MIPI-DSI (2 lanes). u8g2 renders
  * 1bpp at half resolution (360x640 native, scaled 2x2 in the blit driver);
@@ -48,6 +50,20 @@
 /* RX8130CE RTC and INA226 battery monitor on the internal I2C bus. */
 #define SOLAR_OS_BOARD_RTC_ADDR 0x32
 #define SOLAR_OS_BOARD_BATTERY_MONITOR_ADDR 0x41
+
+/* ES8388 DAC (speaker via NS4150B) + ES7210 dual-mic ADC on shared I2S.
+ * The NS4150B enable (SPK_EN) sits on IO expander 1 and is raised during
+ * board bring-up, so there is no PA GPIO on the SoC itself. */
+#define SOLAR_OS_BOARD_AUDIO_OUT_ES8388 1
+#define SOLAR_OS_BOARD_AUDIO_CODEC_OUT "ES8388"
+#define SOLAR_OS_BOARD_AUDIO_CODEC_IN "ES7210"
+#define SOLAR_OS_BOARD_I2S_PORT I2S_NUM_0
+#define SOLAR_OS_BOARD_PIN_I2S_MCLK GPIO_NUM_30
+#define SOLAR_OS_BOARD_PIN_I2S_BCLK GPIO_NUM_27
+#define SOLAR_OS_BOARD_PIN_I2S_WS GPIO_NUM_29
+#define SOLAR_OS_BOARD_PIN_I2S_DOUT GPIO_NUM_26
+#define SOLAR_OS_BOARD_PIN_I2S_DIN GPIO_NUM_28
+#define SOLAR_OS_BOARD_PIN_AUDIO_PA GPIO_NUM_NC
 
 /* Internal I2C bus shared by GT911 touch (0x5D), RX8130 RTC (0x32),
  * INA226 power monitor (0x41), PI4IOE5V6408 IO expanders (0x43/0x44),

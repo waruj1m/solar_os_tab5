@@ -10,6 +10,14 @@
 #include "i2c_bus.h"
 #include "solar_os_board.h"
 
+/* Output codec is board-selected: ES8388 (e.g. M5Stack Tab5) or the default
+ * ES8311. Input is always the ES7210 ADC. */
+#if SOLAR_OS_BOARD_AUDIO_OUT_ES8388
+#define AUDIO_OUT_CODEC_ADDR ES8388_CODEC_DEFAULT_ADDR
+#else
+#define AUDIO_OUT_CODEC_ADDR ES8311_CODEC_DEFAULT_ADDR
+#endif
+
 #define AUDIO_CODEC_I2S_MCLK_MULTIPLE I2S_MCLK_MULTIPLE_384
 #define AUDIO_CODEC_DMA_DESC_NUM 4
 #define AUDIO_CODEC_DMA_FRAME_NUM 128
@@ -206,7 +214,7 @@ static esp_err_t audio_codec_ensure_output(void)
     i2c_bus_lock();
     audio_codec_i2c_cfg_t out_i2c = {
         .port = SOLAR_OS_BOARD_I2C_PORT,
-        .addr = ES8311_CODEC_DEFAULT_ADDR,
+        .addr = AUDIO_OUT_CODEC_ADDR,
         .bus_handle = i2c_handle,
     };
     if (audio_codec.out_ctrl_if == NULL) {
@@ -218,6 +226,17 @@ static esp_err_t audio_codec_ensure_output(void)
     }
 
     if (audio_codec.out_codec_if == NULL) {
+#if SOLAR_OS_BOARD_AUDIO_OUT_ES8388
+        es8388_codec_cfg_t es8388_cfg = {
+            .codec_mode = ESP_CODEC_DEV_WORK_MODE_DAC,
+            .ctrl_if = audio_codec.out_ctrl_if,
+            .gpio_if = audio_codec.gpio_if,
+            .master_mode = false,
+            .pa_pin = SOLAR_OS_BOARD_PIN_AUDIO_PA,
+            .hw_gain.pa_gain = 6.0f,
+        };
+        audio_codec.out_codec_if = es8388_codec_new(&es8388_cfg);
+#else
         es8311_codec_cfg_t es8311_cfg = {
             .codec_mode = ESP_CODEC_DEV_WORK_MODE_DAC,
             .ctrl_if = audio_codec.out_ctrl_if,
@@ -227,6 +246,7 @@ static esp_err_t audio_codec_ensure_output(void)
             .hw_gain.pa_gain = 6.0f,
         };
         audio_codec.out_codec_if = es8311_codec_new(&es8311_cfg);
+#endif
         if (audio_codec.out_codec_if == NULL) {
             ret = ESP_ERR_NO_MEM;
             goto out;
