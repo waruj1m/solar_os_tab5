@@ -12,6 +12,9 @@
 #include "esp_wifi.h"
 #include "esp_wifi_default.h"
 #include "nvs.h"
+#if defined(SOLAR_OS_BOARD_M5STACK_TAB5)
+#include "esp_hosted.h"
+#endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -1157,6 +1160,20 @@ esp_err_t solar_os_wifi_init(void)
             return ESP_ERR_NO_MEM;
         }
     }
+
+#if defined(SOLAR_OS_BOARD_M5STACK_TAB5)
+    /* esp_wifi_remote/esp_hosted normally self-initializes the SDIO
+     * transport to the C6 via a GCC constructor in the managed component
+     * (port_esp_hosted_host_init.c). pioarduino's SCons-based link does not
+     * honor that component's WHOLE_ARCHIVE CMake property, so the
+     * constructor-only translation unit gets dropped (nothing else
+     * references its symbols) and esp_hosted_init() is never called.
+     * Call it explicitly instead of relying on the link-time side effect. */
+    const int hosted_err = esp_hosted_init();
+    if (hosted_err != 0) {
+        return ESP_FAIL;
+    }
+#endif
 
     esp_err_t ret = esp_netif_init();
     if (ret != ESP_OK) {

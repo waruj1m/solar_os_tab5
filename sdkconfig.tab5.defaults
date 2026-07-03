@@ -28,6 +28,10 @@ CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D0_SLOT_1=11
 CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D1_4BIT_BUS_SLOT_1=10
 CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D2_4BIT_BUS_SLOT_1=9
 CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D3_4BIT_BUS_SLOT_1=8
+# Reset polarity confirmed against m5stack/M5Tab5-UserDemo's own sdkconfig
+# (the Kconfig default is active-high, but the Tab5's C6 reset is wired
+# active-low; with the default the host holds the C6 permanently in reset).
+CONFIG_ESP_HOSTED_SDIO_RESET_ACTIVE_LOW=y
 CONFIG_ESP_HOSTED_SDIO_GPIO_RESET_SLAVE=15
 # Bring-up: capture panics to the coredump partition.
 CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
