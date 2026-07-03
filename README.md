@@ -60,6 +60,36 @@ On headless builds, SolarOS starts the primary shell on `uart0` when UART is
 available. `cdc0` remains available for a later port shell session, log job,
 bridge job, or host-side tooling.
 
+### M5Stack Tab5 (branch `board/m5stack-tab5`, not yet merged)
+
+Build target: `m5stack_tab5`
+
+ESP32-P4 tablet target with the display kept on the same u8g2 1bpp pipeline
+as every other board, scaled and blitted to the MIPI-DSI panel.
+
+- ESP32-P4NRW32, dual-core RISC-V, 32 MB PSRAM, 16 MB flash
+- 5" 1280x720 MIPI-DSI panel; u8g2 renders 640x360 and the driver blits
+  each dirty tile 2x2-expanded to RGB565. Panel/touch chip is detected at
+  runtime (ILI9881C+GT911 or ST7121/ST7123 -- units in the wild ship
+  either revision); mirrored 180 degrees to match this panel's mounting.
+- On-screen keyboard: two-finger tap toggles it; also has USB HID keyboard
+  host support on the USB-A port (untested against physical hardware --
+  the author does not yet have a USB keyboard to try against it)
+- WiFi via the on-board ESP32-C6 over SDIO (`esp_wifi_remote`/`esp_hosted`)
+- SDMMC microSD, RX8130 RTC, INA226 battery monitor, ES8388/ES7210 audio,
+  BMI270 IMU (`imu` shell command)
+- No BLE (ESP32-P4 has no radio; `service_ble` is excluded by the `tab5`
+  flavor rather than compiled in and left non-functional)
+
+**Known limitation:** WiFi does not currently connect. The C6 on this unit
+ships M5Stack's own `ESP32C6-WiFi-SDIO-Interface` firmware, which is a
+different project from the `espressif/esp-hosted-mcu` slave firmware this
+host driver expects, so the SDIO handshake fails after the host side
+connects correctly. Fixing this needs the C6 reflashed with matching
+firmware via M5Stack's separate physical download header (see
+`docs.m5stack.com/en/guide/restore_factory/m5tab5_c6_wifi`) -- not
+reachable over the main USB-C port.
+
 ## Build
 
 This project uses PlatformIO with ESP-IDF through the pioarduino Espressif32 platform.
