@@ -16,8 +16,8 @@ set(SOLAR_OS_BOARD_HAS_GFX ON)
 # USB HID keyboard on the USB-A host port (5V rail enabled by the IO
 # expander bring-up in the display init path).
 set(SOLAR_OS_BOARD_HAS_KEYBOARD ON)
-# ESP32-P4 has no radio. WiFi comes from the ESP32-C6 co-processor via
-# esp-hosted (phase 4 of the bring-up); BLE stays off (tab5 flavor excludes
-# the service entirely, since the P4 target has no IDF bt component).
-set(SOLAR_OS_BOARD_HAS_WIFI OFF)
+# ESP32-P4 has no radio. WiFi comes from the on-board ESP32-C6 over SDIO via
+# esp_wifi_remote/esp_hosted (transport pins in sdkconfig.tab5.defaults); BLE
+# stays off (tab5 flavor excludes the service, no IDF bt component on P4).
+set(SOLAR_OS_BOARD_HAS_WIFI ON)
 set(SOLAR_OS_BOARD_HAS_BLE OFF)
