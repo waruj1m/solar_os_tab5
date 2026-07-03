@@ -9,16 +9,29 @@
 #include "lcd_ili9881c_dsi.h"
 #include "pi4ioe5v6408.h"
 #include "solar_os_board.h"
-#include "touch_osk_gt911.h"
+#include "touch_osk.h"
 
 static const char *TAG = "board_display";
 static lcd_ili9881c_t ili9881c_display;
+
+static const char *panel_controller_name(lcd_panel_type_t type)
+{
+    switch (type) {
+    case LCD_PANEL_ST7121:
+        return "ST7121";
+    case LCD_PANEL_ST7123:
+        return "ST7123";
+    case LCD_PANEL_ILI9881C_GT911:
+    default:
+        return "ILI9881C";
+    }
+}
 
 static void display_bind_ili9881c(solar_os_board_display_t *display)
 {
     display->driver = &ili9881c_display;
     display->u8g2 = lcd_ili9881c_get_u8g2(&ili9881c_display);
-    display->controller = SOLAR_OS_BOARD_DISPLAY_CONTROLLER;
+    display->controller = panel_controller_name(lcd_ili9881c_get_panel_type(&ili9881c_display));
     display->width = SOLAR_OS_BOARD_DISPLAY_WIDTH;
     display->height = SOLAR_OS_BOARD_DISPLAY_HEIGHT;
     display->ready = true;
@@ -43,14 +56,8 @@ esp_err_t solar_os_board_display_init(solar_os_board_display_t *display)
     }
     vTaskDelay(pdMS_TO_TICKS(20));
 
-    /* Original Tab5 revision pairs the ILI9881C panel with a GT911 touch
-     * controller; newer units ship an ST7703-family panel instead. */
-    if (i2c_bus_probe(0x5D) != ESP_OK && i2c_bus_probe(0x14) != ESP_OK) {
-        ESP_LOGW(TAG,
-                 "GT911 touch not found: panel may be the newer ST7703 revision, "
-                 "which this driver does not initialize yet");
-    }
-
+    /* lcd_ili9881c_init() detects which of the three panel/touch pairings
+     * this unit has (see lcd_panel_detect() in lcd_ili9881c_dsi.c). */
     err = lcd_ili9881c_init(&ili9881c_display);
     if (err != ESP_OK) {
         return err;
@@ -58,7 +65,7 @@ esp_err_t solar_os_board_display_init(solar_os_board_display_t *display)
 
     /* Touch is part of the panel assembly; failure is non-fatal (the USB
      * keyboard still works without the on-screen keyboard). */
-    if (touch_osk_gt911_init(&ili9881c_display) != ESP_OK) {
+    if (touch_osk_init(&ili9881c_display) != ESP_OK) {
         ESP_LOGW(TAG, "touch/on-screen keyboard unavailable");
     }
 

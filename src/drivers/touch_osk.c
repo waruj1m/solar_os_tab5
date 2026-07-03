@@ -1,9 +1,10 @@
-#include "touch_osk_gt911.h"
+#include "touch_osk.h"
 
 #include <string.h>
 
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_touch_gt911.h"
+#include "esp_lcd_touch_st7123.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -309,23 +310,14 @@ static void osk_touch_task(void *arg)
     }
 }
 
-esp_err_t touch_osk_gt911_init(lcd_ili9881c_t *display)
+static esp_err_t touch_new_gt911(void)
 {
-    if (display == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (touch_handle != NULL) {
-        return ESP_OK;
-    }
-
-    osk_display = display;
-
     esp_lcd_panel_io_i2c_config_t io_config = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
     io_config.scl_speed_hz = i2c_bus_get_speed_hz();
     esp_lcd_panel_io_handle_t io = NULL;
     esp_err_t err = esp_lcd_new_panel_io_i2c(i2c_bus_get_handle(), &io_config, &io);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "touch io init failed: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG, "GT911 io init failed: %s", esp_err_to_name(err));
         return err;
     }
 
@@ -343,6 +335,54 @@ esp_err_t touch_osk_gt911_init(lcd_ili9881c_t *display)
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "GT911 init failed: %s", esp_err_to_name(err));
         esp_lcd_panel_io_del(io);
+    }
+    return err;
+}
+
+static esp_err_t touch_new_st7123(void)
+{
+    esp_lcd_panel_io_i2c_config_t io_config = ESP_LCD_TOUCH_IO_I2C_ST7123_CONFIG();
+    io_config.scl_speed_hz = i2c_bus_get_speed_hz();
+    esp_lcd_panel_io_handle_t io = NULL;
+    esp_err_t err = esp_lcd_new_panel_io_i2c(i2c_bus_get_handle(), &io_config, &io);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "ST7123 touch io init failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    const esp_lcd_touch_config_t touch_config = {
+        .x_max = OSK_PANEL_WIDTH,
+        .y_max = OSK_PANEL_HEIGHT,
+        .rst_gpio_num = -1,
+        .int_gpio_num = -1,
+        .levels = {
+            .reset = 0,
+            .interrupt = 0,
+        },
+    };
+    err = esp_lcd_touch_new_i2c_st7123(io, &touch_config, &touch_handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "ST7123 touch init failed: %s", esp_err_to_name(err));
+        esp_lcd_panel_io_del(io);
+    }
+    return err;
+}
+
+esp_err_t touch_osk_init(lcd_ili9881c_t *display)
+{
+    if (display == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (touch_handle != NULL) {
+        return ESP_OK;
+    }
+
+    osk_display = display;
+
+    const lcd_panel_type_t panel_type = lcd_ili9881c_get_panel_type(display);
+    const esp_err_t err = panel_type == LCD_PANEL_ILI9881C_GT911 ?
+        touch_new_gt911() : touch_new_st7123();
+    if (err != ESP_OK) {
         return err;
     }
 
@@ -355,6 +395,7 @@ esp_err_t touch_osk_gt911_init(lcd_ili9881c_t *display)
         return ESP_ERR_NO_MEM;
     }
 
-    ESP_LOGI(TAG, "GT911 touch + on-screen keyboard ready (two-finger tap toggles)");
+    ESP_LOGI(TAG, "%s touch + on-screen keyboard ready (two-finger tap toggles)",
+            panel_type == LCD_PANEL_ILI9881C_GT911 ? "GT911" : "ST7123");
     return ESP_OK;
 }

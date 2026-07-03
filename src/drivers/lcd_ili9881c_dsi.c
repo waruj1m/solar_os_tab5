@@ -7,10 +7,14 @@
 #include "esp_heap_caps.h"
 #include "esp_lcd_ili9881c.h"
 #include "esp_lcd_panel_io.h"
+#include "esp_lcd_st7121.h"
+#include "esp_lcd_st7123.h"
 #include "esp_log.h"
+#include "i2c_bus.h"
 #include "solar_os_board.h"
 
 #include "lcd_ili9881c_init_data.inc"
+#include "lcd_st7123_init_data.inc"
 
 /* u8g2 keeps rendering 1bpp, at 1/SCALE of the panel resolution and in the
  * panel-native portrait orientation (the terminal presents landscape via
@@ -18,6 +22,10 @@
  * rows) is expanded SCALExSCALE to RGB565 and copied into the MIPI-DSI DPI
  * framebuffer. DSI timing constants below come from m5stack/M5Tab5-UserDemo
  * and are bring-up tunables. */
+/* ponytail: bring-up override to force a specific panel path when the
+ * auto-probe can't identify the hardware; 0 = auto-detect (normal). */
+#define LCD_PANEL_TYPE_OVERRIDE 0 /* 1=ILI9881C 2=ST7121 3=ST7123 */
+
 #define LCD_PANEL_WIDTH 720
 #define LCD_PANEL_HEIGHT 1280
 #define LCD_SCALE SOLAR_OS_BOARD_DISPLAY_SCALE
@@ -264,10 +272,59 @@ static uint8_t lcd_u8x8_display_cb(u8x8_t *u8x8, uint8_t message, uint8_t arg_in
     }
 }
 
+/* Runtime panel detection, mirroring m5stack/M5Tab5-UserDemo's own
+ * bsp_detect_display_type(): GT911 present at its I2C address -> original
+ * ILI9881C panel; else probe touch address 0x55 and read its firmware
+ * version register (1 -> ST7121, 3 -> ST7123, anything else -> ST7123
+ * fallback, matching the reference firmware's own default). */
+static lcd_panel_type_t lcd_panel_detect(void)
+{
+    if (i2c_bus_probe(0x5D) == ESP_OK || i2c_bus_probe(0x14) == ESP_OK) {
+        return LCD_PANEL_ILI9881C_GT911;
+    }
+
+    /* The ST7123/ST7121 touch chip NACKs a bare zero-byte probe even when
+     * fully functional (its 16-bit-register protocol expects a properly
+     * formed transaction) -- go straight to the real firmware-version read
+     * rather than gating on i2c_bus_probe(0x55) first. */
+    const esp_lcd_panel_io_i2c_config_t io_config = {
+        .dev_addr = 0x55,
+        .scl_speed_hz = 100000,
+        .control_phase_bytes = 1,
+        .lcd_cmd_bits = 16,
+        .lcd_param_bits = 8,
+        .flags.disable_control_phase = 1,
+    };
+    esp_lcd_panel_io_handle_t io = NULL;
+    if (esp_lcd_new_panel_io_i2c(i2c_bus_get_handle(), &io_config, &io) != ESP_OK) {
+        ESP_LOGW(TAG, "0x55 touch/panel-id probe io failed, assuming ST7123");
+        return LCD_PANEL_ST7123;
+    }
+
+    uint8_t fw_version = 0;
+    const esp_err_t err = esp_lcd_panel_io_rx_param(io, 0x0000, &fw_version, 1);
+    esp_lcd_panel_io_del(io);
+    if (err == ESP_OK && fw_version == 1) {
+        ESP_LOGI(TAG, "detected ST7121 panel (fw_version=%u)", fw_version);
+        return LCD_PANEL_ST7121;
+    }
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "detected ST7123 panel (fw_version=%u)", fw_version);
+    } else {
+        ESP_LOGW(TAG, "fw_version read failed, assuming ST7123");
+    }
+    return LCD_PANEL_ST7123;
+}
+
 static esp_err_t lcd_panel_setup(lcd_ili9881c_t *display)
 {
     ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(display->panel), TAG, "panel reset failed");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_init(display->panel), TAG, "panel init failed");
+    /* Panel is mounted rotated 180 degrees relative to the DPI raster
+     * origin; mirroring both axes corrects it. All three panel drivers
+     * (ILI9881C, ST7121, ST7123) implement esp_lcd_panel_mirror(). */
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_mirror(display->panel, true, true), TAG,
+                        "panel mirror failed");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(display->panel, true), TAG,
                         "display on failed");
     return ESP_OK;
@@ -298,11 +355,22 @@ esp_err_t lcd_ili9881c_init(lcd_ili9881c_t *display)
         return err;
     }
 
+#if LCD_PANEL_TYPE_OVERRIDE
+    display->panel_type = (lcd_panel_type_t)(LCD_PANEL_TYPE_OVERRIDE - 1);
+    ESP_LOGW(TAG, "panel type forced to %d by LCD_PANEL_TYPE_OVERRIDE", display->panel_type);
+#else
+    display->panel_type = lcd_panel_detect();
+#endif
+    const bool is_ili9881c = display->panel_type == LCD_PANEL_ILI9881C_GT911;
+    const bool is_st7121 = display->panel_type == LCD_PANEL_ST7121;
+
     const esp_lcd_dsi_bus_config_t bus_config = {
         .bus_id = 0,
         .num_data_lanes = LCD_DSI_LANES,
         .phy_clk_src = MIPI_DSI_PHY_CLK_SRC_DEFAULT,
-        .lane_bit_rate_mbps = LCD_DSI_LANE_BIT_RATE_MBPS,
+        /* ST7121/ST7123 run the DSI lanes faster than ILI9881C (965 vs
+         * 730 Mbps), per m5stack/M5Tab5-UserDemo's tuned values. */
+        .lane_bit_rate_mbps = is_ili9881c ? LCD_DSI_LANE_BIT_RATE_MBPS : 965,
     };
     err = esp_lcd_new_dsi_bus(&bus_config, &display->dsi_bus);
     if (err != ESP_OK) {
@@ -324,42 +392,84 @@ esp_err_t lcd_ili9881c_init(lcd_ili9881c_t *display)
     esp_lcd_dpi_panel_config_t dpi_config = {
         .virtual_channel = 0,
         .dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT,
-        .dpi_clock_freq_mhz = LCD_DPI_CLOCK_MHZ,
+        .dpi_clock_freq_mhz = is_ili9881c ? LCD_DPI_CLOCK_MHZ : 70,
         .pixel_format = LCD_COLOR_PIXEL_FORMAT_RGB565,
         .num_fbs = 1,
         .video_timing = {
             .h_size = LCD_PANEL_WIDTH,
             .v_size = LCD_PANEL_HEIGHT,
-            .hsync_back_porch = 140,
-            .hsync_pulse_width = 40,
+            .hsync_back_porch = is_ili9881c ? 140 : 40,
+            .hsync_pulse_width = is_ili9881c ? 40 : 2,
             .hsync_front_porch = 40,
-            .vsync_back_porch = 20,
-            .vsync_pulse_width = 4,
-            .vsync_front_porch = 20,
+            .vsync_back_porch = is_ili9881c ? 20 : (is_st7121 ? 24 : 8),
+            .vsync_pulse_width = is_ili9881c ? 4 : (is_st7121 ? 20 : 2),
+            .vsync_front_porch = is_ili9881c ? 20 : (is_st7121 ? 200 : 220),
         },
         /* ponytail: dirty bands are CPU memcpy'd; enable DMA2D if terminal
          * scrolling ever feels slow. */
         .flags.use_dma2d = false,
     };
 
-    ili9881c_vendor_config_t vendor_config = {
-        .init_cmds = tab5_lcd_ili9881c_specific_init_code_default,
-        .init_cmds_size = sizeof(tab5_lcd_ili9881c_specific_init_code_default) /
-                          sizeof(tab5_lcd_ili9881c_specific_init_code_default[0]),
-        .mipi_config = {
-            .dsi_bus = display->dsi_bus,
-            .dpi_config = &dpi_config,
-            .lane_num = LCD_DSI_LANES,
-        },
-    };
-
-    const esp_lcd_panel_dev_config_t panel_config = {
+    const esp_lcd_panel_dev_config_t ili9881c_panel_config = {
         .bits_per_pixel = 16,
         .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
         .reset_gpio_num = -1, /* reset wired to the PI4IOE5V6408 expander */
-        .vendor_config = &vendor_config,
+        .vendor_config = &(ili9881c_vendor_config_t){
+            .init_cmds = tab5_lcd_ili9881c_specific_init_code_default,
+            .init_cmds_size = sizeof(tab5_lcd_ili9881c_specific_init_code_default) /
+                              sizeof(tab5_lcd_ili9881c_specific_init_code_default[0]),
+            .mipi_config = {
+                .dsi_bus = display->dsi_bus,
+                .dpi_config = &dpi_config,
+                .lane_num = LCD_DSI_LANES,
+            },
+        },
     };
-    err = esp_lcd_new_panel_ili9881c(display->io, &panel_config, &display->panel);
+    /* ST7121/ST7123 report a working COLMOD only at these exact values,
+     * per m5stack/M5Tab5-UserDemo (dpi_config.pixel_format stays RGB565;
+     * this only affects the panel's own color-mode command). */
+    const esp_lcd_panel_dev_config_t st7121_panel_config = {
+        .bits_per_pixel = 24,
+        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
+        .data_endian = LCD_RGB_DATA_ENDIAN_LITTLE,
+        .reset_gpio_num = -1,
+        .vendor_config = &(st7121_vendor_config_t){
+            .init_cmds = NULL, /* driver's own built-in default works for ST7121 */
+            .init_cmds_size = 0,
+            .mipi_config = {
+                .dsi_bus = display->dsi_bus,
+                .dpi_config = &dpi_config,
+            },
+        },
+    };
+    const esp_lcd_panel_dev_config_t st7123_panel_config = {
+        .bits_per_pixel = 24,
+        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
+        .data_endian = LCD_RGB_DATA_ENDIAN_LITTLE,
+        .reset_gpio_num = -1,
+        .vendor_config = &(st7123_vendor_config_t){
+            .init_cmds = st7123_vendor_specific_init_default,
+            .init_cmds_size = sizeof(st7123_vendor_specific_init_default) /
+                              sizeof(st7123_vendor_specific_init_default[0]),
+            .mipi_config = {
+                .dsi_bus = display->dsi_bus,
+                .dpi_config = &dpi_config,
+            },
+        },
+    };
+
+    switch (display->panel_type) {
+    case LCD_PANEL_ST7121:
+        err = esp_lcd_new_panel_st7121(display->io, &st7121_panel_config, &display->panel);
+        break;
+    case LCD_PANEL_ST7123:
+        err = esp_lcd_new_panel_st7123(display->io, &st7123_panel_config, &display->panel);
+        break;
+    case LCD_PANEL_ILI9881C_GT911:
+    default:
+        err = esp_lcd_new_panel_ili9881c(display->io, &ili9881c_panel_config, &display->panel);
+        break;
+    }
     if (err != ESP_OK) {
         lcd_ili9881c_deinit(display);
         return err;
@@ -480,4 +590,9 @@ void lcd_ili9881c_deinit(lcd_ili9881c_t *display)
 u8g2_t *lcd_ili9881c_get_u8g2(lcd_ili9881c_t *display)
 {
     return display == NULL ? NULL : &display->u8g2;
+}
+
+lcd_panel_type_t lcd_ili9881c_get_panel_type(const lcd_ili9881c_t *display)
+{
+    return display == NULL ? LCD_PANEL_ILI9881C_GT911 : display->panel_type;
 }

@@ -11,7 +11,17 @@
 #include "freertos/semphr.h"
 #include "u8g2.h"
 
+/* Tab5 units in the wild ship one of two panel/touch pairings; detected at
+ * runtime (see lcd_panel_detect() in the .c file) the same way M5Stack's
+ * own firmware does it. All three share the same 720x1280 resolution. */
+typedef enum {
+    LCD_PANEL_ILI9881C_GT911,
+    LCD_PANEL_ST7121,
+    LCD_PANEL_ST7123,
+} lcd_panel_type_t;
+
 typedef struct {
+    lcd_panel_type_t panel_type;
     esp_lcd_dsi_bus_handle_t dsi_bus;
     esp_lcd_panel_io_handle_t io;
     esp_lcd_panel_handle_t panel;
@@ -35,6 +45,7 @@ esp_err_t lcd_ili9881c_init(lcd_ili9881c_t *display);
 esp_err_t lcd_ili9881c_resume(lcd_ili9881c_t *display);
 void lcd_ili9881c_deinit(lcd_ili9881c_t *display);
 u8g2_t *lcd_ili9881c_get_u8g2(lcd_ili9881c_t *display);
+lcd_panel_type_t lcd_ili9881c_get_panel_type(const lcd_ili9881c_t *display);
 
 /* Overlay control (used by the on-screen keyboard). Passing NULL disables
  * the overlay. Both calls repaint the whole panel. */
