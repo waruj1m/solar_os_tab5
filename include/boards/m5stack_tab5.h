@@ -13,7 +13,8 @@
      SOLAR_OS_BOARD_CAP_CDC | \
      SOLAR_OS_BOARD_CAP_I2C | \
      SOLAR_OS_BOARD_CAP_DISPLAY | \
-     SOLAR_OS_BOARD_CAP_GFX)
+     SOLAR_OS_BOARD_CAP_GFX | \
+     SOLAR_OS_BOARD_CAP_KEYBOARD)
 
 /* 5" 720x1280 portrait-native IPS behind MIPI-DSI (2 lanes). u8g2 renders
  * 1bpp at half resolution (360x640 native, scaled 2x2 in the blit driver);

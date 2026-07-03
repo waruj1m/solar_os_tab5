@@ -5,6 +5,7 @@ set(SOLAR_OS_BOARD_DEFINE "SOLAR_OS_BOARD_M5STACK_TAB5")
 include("${CMAKE_CURRENT_LIST_DIR}/drivers/cdc_usb_serial_jtag.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/drivers/i2c_esp_idf.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/drivers/display_ili9881c_dsi.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/drivers/keyboard_usb_hid.cmake")
 
 set(SOLAR_OS_BOARD_HAS_PSRAM ON)
 set(SOLAR_OS_BOARD_PSRAM_BYTES 33554432)
@@ -12,6 +13,9 @@ set(SOLAR_OS_BOARD_HAS_CDC ON)
 set(SOLAR_OS_BOARD_HAS_I2C ON)
 set(SOLAR_OS_BOARD_HAS_DISPLAY ON)
 set(SOLAR_OS_BOARD_HAS_GFX ON)
+# USB HID keyboard on the USB-A host port (5V rail enabled by the IO
+# expander bring-up in the display init path).
+set(SOLAR_OS_BOARD_HAS_KEYBOARD ON)
 # ESP32-P4 has no radio. WiFi comes from the ESP32-C6 co-processor via
 # esp-hosted (phase 4 of the bring-up); BLE stays off (tab5 flavor excludes
 # the service entirely, since the P4 target has no IDF bt component).

@@ -19,3 +19,7 @@ dependencies:
     version: "^1.0.0"
     rules:
       - if: "target in [esp32p4]"
+  espressif/usb_host_hid:
+    version: "^1.0.3"
+    rules:
+      - if: "target in [esp32p4]"
