@@ -163,6 +163,7 @@ static const shell_command_t shell_builtin_commands[] = {
     {"audio", "audio codec tools", solar_os_shell_cmd_audio},
     {"uart", "UART port tools", solar_os_shell_cmd_uart},
     {"i2c", "I2C bus tools", solar_os_shell_cmd_i2c},
+    {"imu", "read accelerometer/gyroscope", solar_os_shell_cmd_imu},
     {"gpio", "expansion GPIO tools", solar_os_shell_cmd_gpio},
     {"pwm", "expansion PWM output", solar_os_shell_cmd_pwm},
     {"date", "read or set local date", solar_os_shell_cmd_date},

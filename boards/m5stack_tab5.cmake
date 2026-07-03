@@ -10,6 +10,7 @@ include("${CMAKE_CURRENT_LIST_DIR}/drivers/storage_sdmmc.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/drivers/rtc_rx8130.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/drivers/battery_ina226.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/drivers/audio_es8388_es7210.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/drivers/imu_bmi270.cmake")
 
 set(SOLAR_OS_BOARD_HAS_PSRAM ON)
 set(SOLAR_OS_BOARD_PSRAM_BYTES 33554432)

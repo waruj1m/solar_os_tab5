@@ -65,6 +65,10 @@
 #define SOLAR_OS_BOARD_PIN_I2S_DIN GPIO_NUM_28
 #define SOLAR_OS_BOARD_PIN_AUDIO_PA GPIO_NUM_NC
 
+/* BMI270 6-axis IMU on the internal I2C bus (SDO tied low). No dedicated
+ * capability/service exists yet -- see boards/drivers/imu_bmi270.cmake. */
+#define SOLAR_OS_BOARD_IMU_ADDR 0x68
+
 /* Internal I2C bus shared by GT911 touch (0x5D), RX8130 RTC (0x32),
  * INA226 power monitor (0x41), PI4IOE5V6408 IO expanders (0x43/0x44),
  * and the ES8388/ES7210 audio codecs. Pin map per m5stack/M5Tab5-UserDemo. */

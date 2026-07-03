@@ -2496,3 +2496,52 @@ void solar_os_shell_cmd_humidity(solar_os_context_t *ctx, int argc, char **argv)
 
     terminal_printf_fixed_1(term, "Humidity", environment.humidity_percent, "%RH");
 }
+
+#if defined(SOLAR_OS_BOARD_M5STACK_TAB5)
+#include "imu_bmi270.h"
+#endif
+
+void solar_os_shell_cmd_imu(solar_os_context_t *ctx, int argc, char **argv)
+{
+    solar_os_shell_io_t *term = terminal(ctx);
+
+    (void)argv;
+
+    if (argc != 1) {
+        solar_os_shell_io_writeln(term, "usage: imu");
+        return;
+    }
+
+#if defined(SOLAR_OS_BOARD_M5STACK_TAB5)
+    static bool imu_initialized;
+    static bool imu_init_failed;
+
+    if (!imu_initialized && !imu_init_failed) {
+        const esp_err_t init_err = imu_bmi270_init();
+        if (init_err != ESP_OK) {
+            imu_init_failed = true;
+            solar_os_shell_io_printf(term, "imu: init failed: %s\n", esp_err_to_name(init_err));
+            return;
+        }
+        imu_initialized = true;
+    }
+    if (imu_init_failed) {
+        solar_os_shell_io_writeln(term, "imu: not detected");
+        return;
+    }
+
+    imu_bmi270_sample_t sample;
+    const esp_err_t err = imu_bmi270_read(&sample);
+    if (err != ESP_OK) {
+        solar_os_shell_io_printf(term, "imu: read failed: %s\n", esp_err_to_name(err));
+        return;
+    }
+
+    solar_os_shell_io_printf(term, "Accel (g):  X=%.3f Y=%.3f Z=%.3f\n",
+                             sample.accel_g[0], sample.accel_g[1], sample.accel_g[2]);
+    solar_os_shell_io_printf(term, "Gyro (dps): X=%.2f Y=%.2f Z=%.2f\n",
+                             sample.gyro_dps[0], sample.gyro_dps[1], sample.gyro_dps[2]);
+#else
+    (void)shell_print_not_supported(term, "imu", "6-axis IMU", ESP_ERR_NOT_SUPPORTED);
+#endif
+}
