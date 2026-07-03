@@ -9,6 +9,7 @@
 #include "lcd_ili9881c_dsi.h"
 #include "pi4ioe5v6408.h"
 #include "solar_os_board.h"
+#include "touch_osk_gt911.h"
 
 static const char *TAG = "board_display";
 static lcd_ili9881c_t ili9881c_display;
@@ -53,6 +54,12 @@ esp_err_t solar_os_board_display_init(solar_os_board_display_t *display)
     err = lcd_ili9881c_init(&ili9881c_display);
     if (err != ESP_OK) {
         return err;
+    }
+
+    /* Touch is part of the panel assembly; failure is non-fatal (the USB
+     * keyboard still works without the on-screen keyboard). */
+    if (touch_osk_gt911_init(&ili9881c_display) != ESP_OK) {
+        ESP_LOGW(TAG, "touch/on-screen keyboard unavailable");
     }
 
     display_bind_ili9881c(display);

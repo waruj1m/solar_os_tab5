@@ -527,6 +527,21 @@ esp_err_t solar_os_keyboard_init(void)
     return ESP_OK;
 }
 
+esp_err_t solar_os_keyboard_inject(const char *chars, size_t len)
+{
+    if (chars == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (char_queue == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    for (size_t i = 0; i < len; i++) {
+        queue_char(chars[i]);
+    }
+    return ESP_OK;
+}
+
 size_t solar_os_keyboard_read_chars(char *buffer, size_t buffer_len)
 {
     if (char_queue == NULL || buffer == NULL || buffer_len == 0) {

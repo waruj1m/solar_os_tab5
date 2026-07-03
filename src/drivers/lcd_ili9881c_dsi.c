@@ -122,12 +122,23 @@ static esp_err_t lcd_flush_tile_row(lcd_ili9881c_t *display, uint8_t y_pos)
         return ESP_OK;
     }
 
+    if (display->flush_mutex != NULL) {
+        xSemaphoreTake(display->flush_mutex, portMAX_DELAY);
+    }
+
     const uint8_t *src = display->buffer + (size_t)y_pos * LCD_ROW_BYTES;
+    const uint8_t *ov_row = display->overlay != NULL ?
+        display->overlay + (size_t)y_pos * display->overlay_width : NULL;
     for (int row = 0; row < rows; row++) {
         uint16_t *line = display->line_buffer + (size_t)row * LCD_SCALE * LCD_PANEL_WIDTH;
         const uint8_t mask = (uint8_t)(1U << row);
         for (int x = 0; x < LCD_NATIVE_WIDTH; x++) {
-            const uint16_t color = (src[x] & mask) ? LCD_COLOR_FG : LCD_COLOR_BG;
+            uint8_t bits = src[x];
+            if (ov_row != NULL &&
+                (uint16_t)(x - display->overlay_x0) < display->overlay_width) {
+                bits = ov_row[x - display->overlay_x0];
+            }
+            const uint16_t color = (bits & mask) ? LCD_COLOR_FG : LCD_COLOR_BG;
             for (int sx = 0; sx < LCD_SCALE; sx++) {
                 line[x * LCD_SCALE + sx] = color;
             }
@@ -139,9 +150,53 @@ static esp_err_t lcd_flush_tile_row(lcd_ili9881c_t *display, uint8_t y_pos)
     }
 
     /* DPI draw_bitmap copies into the panel framebuffer synchronously. */
-    return esp_lcd_panel_draw_bitmap(display->panel, 0, y0 * LCD_SCALE,
-                                     LCD_PANEL_WIDTH, (y0 + rows) * LCD_SCALE,
-                                     display->line_buffer);
+    const esp_err_t err = esp_lcd_panel_draw_bitmap(display->panel, 0, y0 * LCD_SCALE,
+                                                    LCD_PANEL_WIDTH, (y0 + rows) * LCD_SCALE,
+                                                    display->line_buffer);
+    if (display->flush_mutex != NULL) {
+        xSemaphoreGive(display->flush_mutex);
+    }
+    return err;
+}
+
+esp_err_t lcd_ili9881c_flush_all(lcd_ili9881c_t *display)
+{
+    if (display == NULL || display->panel == NULL || display->buffer == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t err = ESP_OK;
+    for (uint8_t y_pos = 0; y_pos < LCD_TILE_HEIGHT; y_pos++) {
+        if (display->shadow != NULL) {
+            memcpy(display->shadow + (size_t)y_pos * LCD_ROW_BYTES,
+                   display->buffer + (size_t)y_pos * LCD_ROW_BYTES, LCD_ROW_BYTES);
+        }
+        const esp_err_t row_err = lcd_flush_tile_row(display, y_pos);
+        if (row_err != ESP_OK && err == ESP_OK) {
+            err = row_err;
+        }
+    }
+    return err;
+}
+
+void lcd_ili9881c_set_overlay(lcd_ili9881c_t *display, const uint8_t *buffer,
+                              uint16_t native_x0, uint16_t native_width)
+{
+    if (display == NULL) {
+        return;
+    }
+
+    if (display->flush_mutex != NULL) {
+        xSemaphoreTake(display->flush_mutex, portMAX_DELAY);
+    }
+    display->overlay = buffer;
+    display->overlay_x0 = native_x0;
+    display->overlay_width = buffer != NULL ? native_width : 0;
+    if (display->flush_mutex != NULL) {
+        xSemaphoreGive(display->flush_mutex);
+    }
+
+    (void)lcd_ili9881c_flush_all(display);
 }
 
 static uint8_t lcd_u8x8_byte_cb(u8x8_t *u8x8, uint8_t message, uint8_t arg_int, void *arg_ptr)
@@ -226,6 +281,11 @@ esp_err_t lcd_ili9881c_init(lcd_ili9881c_t *display)
 
     memset(display, 0, sizeof(*display));
     display->last_error = ESP_OK;
+
+    display->flush_mutex = xSemaphoreCreateMutex();
+    if (display->flush_mutex == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
 
     /* VDD_MIPI_DPHY is fed from the on-chip LDO on the Tab5. */
     const esp_ldo_channel_config_t ldo_config = {
@@ -403,10 +463,16 @@ void lcd_ili9881c_deinit(lcd_ili9881c_t *display)
         display->line_buffer = NULL;
     }
 
+    if (display->flush_mutex != NULL) {
+        vSemaphoreDelete(display->flush_mutex);
+        display->flush_mutex = NULL;
+    }
+
     if (active_display == display) {
         active_display = NULL;
     }
 
+    display->overlay = NULL;
     display->buffer_size = 0;
     display->line_buffer_size = 0;
 }
