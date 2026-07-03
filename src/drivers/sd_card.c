@@ -14,6 +14,9 @@
 #include "driver/spi_common.h"
 #else
 #include "driver/sdmmc_host.h"
+#ifdef SOLAR_OS_BOARD_SDMMC_LDO_CHANNEL
+#include "sd_pwr_ctrl_by_on_chip_ldo.h"
+#endif
 #endif
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -176,6 +179,25 @@ static void sd_card_deinit_host(void)
 static esp_err_t sd_card_init_host(void)
 {
     host = (sdmmc_host_t)SDMMC_HOST_DEFAULT();
+#ifdef SOLAR_OS_BOARD_SDMMC_SLOT
+    /* Boards that share SDMMC with another device (e.g. the Tab5's hosted
+     * ESP32-C6 on slot 1) pin the card to a specific slot. */
+    host.slot = SOLAR_OS_BOARD_SDMMC_SLOT;
+#endif
+#ifdef SOLAR_OS_BOARD_SDMMC_LDO_CHANNEL
+    /* ESP32-P4 SDMMC IO rail is fed from an on-chip LDO. */
+    static sd_pwr_ctrl_handle_t pwr_ctrl;
+    if (pwr_ctrl == NULL) {
+        const sd_pwr_ctrl_ldo_config_t ldo_config = {
+            .ldo_chan_id = SOLAR_OS_BOARD_SDMMC_LDO_CHANNEL,
+        };
+        const esp_err_t pwr_ret = sd_pwr_ctrl_new_on_chip_ldo(&ldo_config, &pwr_ctrl);
+        if (pwr_ret != ESP_OK) {
+            return pwr_ret;
+        }
+    }
+    host.pwr_ctrl_handle = pwr_ctrl;
+#endif
     sdmmc_slot_config_t slot_config;
     sd_card_make_slot_config(&slot_config);
 

@@ -15,7 +15,10 @@
      SOLAR_OS_BOARD_CAP_DISPLAY | \
      SOLAR_OS_BOARD_CAP_GFX | \
      SOLAR_OS_BOARD_CAP_KEYBOARD | \
-     SOLAR_OS_BOARD_CAP_WIFI)
+     SOLAR_OS_BOARD_CAP_WIFI | \
+     SOLAR_OS_BOARD_CAP_SD | \
+     SOLAR_OS_BOARD_CAP_RTC | \
+     SOLAR_OS_BOARD_CAP_BATTERY)
 
 /* 5" 720x1280 portrait-native IPS behind MIPI-DSI (2 lanes). u8g2 renders
  * 1bpp at half resolution (360x640 native, scaled 2x2 in the blit driver);
@@ -33,6 +36,18 @@
 
 /* GT911 capacitive touch (original panel revision). */
 #define SOLAR_OS_BOARD_PIN_TOUCH_INT GPIO_NUM_23
+
+/* microSD on SDMMC slot 0 (IOMUX-fixed pins; the hosted ESP32-C6 owns
+ * slot 1). The P4 SD IO rail is powered from on-chip LDO channel 4. */
+#define SOLAR_OS_BOARD_SDMMC_SLOT 0
+#define SOLAR_OS_BOARD_SDMMC_LDO_CHANNEL 4
+#define SOLAR_OS_BOARD_PIN_SDMMC_CLK GPIO_NUM_43
+#define SOLAR_OS_BOARD_PIN_SDMMC_CMD GPIO_NUM_44
+#define SOLAR_OS_BOARD_PIN_SDMMC_D0 GPIO_NUM_39
+
+/* RX8130CE RTC and INA226 battery monitor on the internal I2C bus. */
+#define SOLAR_OS_BOARD_RTC_ADDR 0x32
+#define SOLAR_OS_BOARD_BATTERY_MONITOR_ADDR 0x41
 
 /* Internal I2C bus shared by GT911 touch (0x5D), RX8130 RTC (0x32),
  * INA226 power monitor (0x41), PI4IOE5V6408 IO expanders (0x43/0x44),
